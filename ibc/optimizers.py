@@ -88,14 +88,16 @@ class DerivativeFreeOptimizer:
             iters=config.iters,
             train_samples=config.train_samples,
             inference_samples=config.inference_samples,
-            bounds=config.bounds,
+            # Ensure bounds are float32 to avoid dtype mismatches with model FloatTensors
+            bounds=config.bounds.astype("float32") if isinstance(config.bounds, np.ndarray) else config.bounds,
         )
 
     def _sample(self, num_samples: int) -> torch.Tensor:
         """Helper method for drawing samples from the uniform random distribution."""
         size = (num_samples, self.bounds.shape[1])
         samples = np.random.uniform(self.bounds[0, :], self.bounds[1, :], size=size)
-        return torch.as_tensor(samples, dtype=torch.float32, device=self.device)
+        # Use float32 numpy -> torch conversion to match model dtype (float32)
+        return torch.as_tensor(samples.astype(np.float32), dtype=torch.float32, device=self.device)
 
     def sample(self, batch_size: int, ebm: nn.Module) -> torch.Tensor:
         del ebm  # The derivative-free optimizer does not use the ebm for sampling.
@@ -106,7 +108,8 @@ class DerivativeFreeOptimizer:
     def infer(self, x: torch.Tensor, ebm: nn.Module) -> torch.Tensor:
         """Optimize for the best action given a trained EBM."""
         noise_scale = self.noise_scale
-        bounds = torch.as_tensor(self.bounds).to(self.device)
+        # Make sure bounds tensor matches the dtype of the samples and model (float32)
+        bounds = torch.as_tensor(self.bounds, dtype=torch.float32, device=self.device)
 
         samples = self._sample(x.size(0) * self.inference_samples)
         samples = samples.reshape(x.size(0), self.inference_samples, -1)

@@ -41,11 +41,12 @@ def make_dataloaders(
 ) -> Dict[str, torch.utils.data.DataLoader]:
     """Initialize train/test dataloaders based on config values."""
     # Train split.
+    # dataset config: set seed and dataset size.
     train_dataset_config = dataset.DatasetConfig(
         dataset_size=train_config.train_dataset_size,
         seed=train_config.seed,
     )
-    train_dataset = dataset.CoordinateRegression(train_dataset_config)
+    train_dataset = dataset.CoordinateRegression(train_dataset_config)  # data: coordinate regression shape:（N,2)
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=train_config.train_batch_size,
@@ -80,18 +81,18 @@ def make_train_state(
     train_dataloader: torch.utils.data.DataLoader,
 ) -> trainer.TrainStateProtocol:
     """Initialize train state based on config values."""
-    in_channels = 3
-    if train_config.coord_conv:
+    in_channels = 3 # 输入通道，对应RGB
+    if train_config.coord_conv: # 如果启用坐标卷积（coord_conv），输入通道数+2（添加x/y坐标通道
         in_channels += 2
-    residual_blocks = [16, 32, 32]
-    cnn_config = models.CNNConfig(in_channels, residual_blocks)
+    residual_blocks = [16, 32, 32]  # 残差块的数量和通道数
+    cnn_config = models.CNNConfig(in_channels, residual_blocks) # CNN配置
 
     input_dim = 16  # We have a 1x1 conv that reduces to 16 channels.
     output_dim = 2
     if train_config.spatial_reduction == models.SpatialReduction.SPATIAL_SOFTMAX:
         input_dim *= 2
     if train_config.policy_type == trainer.PolicyType.IMPLICIT:
-        input_dim += 2  # Dimension of the targets.
+        input_dim += 2  # Dimension of the targets. o+a
         output_dim = 1
     mlp_config = models.MLPConfig(
         input_dim=input_dim,
