@@ -113,7 +113,7 @@ def plot(
         alpha=1.0,
     )
 
-    # Add convex hull of train set.
+    # Add convex hull of train set. convex hull 外面的就是extrapolation
     if train_coords.shape[0] > 2:
         for simplex in ConvexHull(train_coords).simplices:
             plt.plot(

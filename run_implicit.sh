@@ -5,7 +5,7 @@ set -x
 
 for train_size in 10 30
 do
-    EXPERIMENT_NAME=implicit_ebm_${train_size}
+    EXPERIMENT_NAME=implicit_ebm_test_${train_size}
 
     python train.py \
         --experiment-name $EXPERIMENT_NAME \
