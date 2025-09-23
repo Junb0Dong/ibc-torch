@@ -175,10 +175,13 @@ class EBMConvMLP(nn.Module):
         return out.view(B, N)
 
 
+# before run 
+# export PYTHONPATH="$PWD"
+# python -m ibc.models
 if __name__ == "__main__":
     config = ConvMLPConfig(
         cnn_config=CNNConfig(5),
-        mlp_config=MLPConfig(32, 128, 2, 2),
+        mlp_config=MLPConfig(16, 128, 2, 2),
         spatial_reduction=SpatialReduction.AVERAGE_POOL,
         coord_conv=True,
     )
