@@ -59,7 +59,60 @@ class MLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+    
 
+class EBMMLP(nn.Module):
+    """A feedforward multi-layer perceptron."""
+
+    def __init__(self, config: MLPConfig) -> None:
+        super().__init__()
+
+        dropout_layer: Callable
+        if config.dropout_prob is not None:
+            dropout_layer = partial(nn.Dropout, p=config.dropout_prob)
+        else:
+            dropout_layer = nn.Identity
+
+        layers: Sequence[nn.Module]
+        if config.hidden_depth == 0:
+            layers = [nn.Linear(config.input_dim, config.output_dim)]
+        else:
+            layers = [
+                nn.Linear(config.input_dim, config.hidden_dim),
+                config.activation_fn.value(),
+                dropout_layer(),
+            ]
+            for _ in range(config.hidden_depth - 1):
+                layers += [
+                    nn.Linear(config.hidden_dim, config.hidden_dim),
+                    config.activation_fn.value(),
+                    dropout_layer(),
+                ]
+            layers += [nn.Linear(config.hidden_dim, config.output_dim)]
+        layers = [layer for layer in layers if not isinstance(layer, nn.Identity)]
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # print("x.shape:", x.shape)  # 输出: [8, 1]
+        # print("y.shape:", y.shape)  # 输出: [8, 16384, 1]
+        fused = torch.cat([x.unsqueeze(1).expand(-1, y.size(1), -1), y], dim=-1)
+        B, N, D = fused.size()
+        fused = fused.reshape(B * N, D)
+        out = self.net(fused)
+        return out.view(B, N)
+    
+    # def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    #     if self.coord_conv:
+    #         x = CoordConv()(x)
+    #     out = self.cnn(x, activate=True)
+    #     out = F.relu(self.conv(out))
+    #     out = self.reducer(out)
+    #     fused = torch.cat([out.unsqueeze(1).expand(-1, y.size(1), -1), y], dim=-1)
+    #     B, N, D = fused.size()
+    #     fused = fused.reshape(B * N, D)
+    #     out = self.mlp(fused)
+    #     return out.view(B, N)
 
 class ResidualBlock(nn.Module):
     def __init__(
@@ -179,17 +232,30 @@ class EBMConvMLP(nn.Module):
 # export PYTHONPATH="$PWD"
 # python -m ibc.models
 if __name__ == "__main__":
-    config = ConvMLPConfig(
-        cnn_config=CNNConfig(5),
-        mlp_config=MLPConfig(16, 128, 2, 2),
-        spatial_reduction=SpatialReduction.AVERAGE_POOL,
-        coord_conv=True,
+    # config = ConvMLPConfig(
+    #     cnn_config=CNNConfig(5),
+    #     mlp_config=MLPConfig(16, 128, 2, 2),
+    #     spatial_reduction=SpatialReduction.AVERAGE_POOL,
+    #     coord_conv=True,
+    # )
+
+    # net = ConvMLP(config)
+    # print(net)
+
+    # x = torch.randn(2, 3, 96, 96)
+    # with torch.no_grad():
+    #     out = net(x)
+    # print(out.shape)
+
+    config = MLPConfig(
+        input_dim=2, hidden_dim=128, output_dim=1, hidden_depth=3, dropout_prob=0.1
     )
 
-    net = ConvMLP(config)
+    net = EBMMLP(config)
     print(net)
 
-    x = torch.randn(2, 3, 96, 96)
+    x = torch.randn(8, 1)
+    y = torch.randn(8, 1, 1)
     with torch.no_grad():
-        out = net(x)
+        out = net(x, y)
     print(out.shape)
