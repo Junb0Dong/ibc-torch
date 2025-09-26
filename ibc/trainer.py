@@ -124,6 +124,98 @@ class ExplicitTrainState:
         self.model.eval()
         return self.model(input.to(self.device))
 
+# for 1D explicit model
+@dataclasses.dataclass
+class ExplicitTrainState2D:
+    """An explicit feedforward policy trained with a MSE objective."""
+
+    model: nn.Module
+    optimizer: torch.optim.Optimizer
+    scheduler: torch.optim.lr_scheduler._LRScheduler
+    device: torch.device
+    steps: int
+
+    @staticmethod
+    def initialize(
+        model_config: models.ConvMLPConfig,
+        optim_config: optimizers.OptimizerConfig,
+        device_type: str,
+    ) -> ExplicitTrainState2D:
+        device = torch.device(device_type if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {device}")
+
+        model = models.MLP(config=model_config)
+        model.to(device)
+
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=optim_config.learning_rate,
+            weight_decay=optim_config.weight_decay,
+            betas=(optim_config.beta1, optim_config.beta2),
+        )
+
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=optim_config.lr_scheduler_step,
+            gamma=optim_config.lr_scheduler_gamma,
+        )
+
+        return ExplicitTrainState2D(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            steps=0,
+        )
+
+    def training_step(
+        self, input: torch.Tensor, target: torch.Tensor
+    ) -> experiment.TensorboardLogData:
+        self.model.train()
+
+        input = input.to(self.device)
+        target = target.to(self.device)
+
+        out = self.model(input)
+        loss = F.mse_loss(out, target)
+
+        self.optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        self.optimizer.step()
+        self.scheduler.step()
+
+        self.steps += 1
+
+        return experiment.TensorboardLogData(
+            scalars={
+                "train/loss": loss.item(),
+                "train/learning_rate": self.scheduler.get_last_lr()[0],
+            }
+        )
+
+    @torch.no_grad()
+    def evaluate(
+        self, dataloader: torch.utils.data.DataLoader
+    ) -> experiment.TensorboardLogData:
+        self.model.eval()
+
+        total_mse = 0.0
+        for input, target in tqdm(dataloader, leave=False):
+            input = input.to(self.device)
+            target = target.to(self.device)
+
+            out = self.model(input)
+            mse = F.mse_loss(out, target, reduction="none")
+            total_mse += mse.mean(dim=-1).sum().item()
+
+        mean_mse = total_mse / len(dataloader.dataset)
+        return experiment.TensorboardLogData(scalars={"test/mse": mean_mse})
+
+    @torch.no_grad()
+    def predict(self, input: torch.Tensor) -> torch.Tensor:
+        self.model.eval()
+        return self.model(input.to(self.device))
+
 
 @dataclasses.dataclass
 class ImplicitTrainState:
