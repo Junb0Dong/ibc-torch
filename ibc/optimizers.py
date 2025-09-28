@@ -92,12 +92,40 @@ class DerivativeFreeOptimizer:
             bounds=config.bounds.astype("float32") if isinstance(config.bounds, np.ndarray) else config.bounds,
         )
 
+    # def _sample(self, num_samples: int) -> torch.Tensor:
+    #     """Helper method for drawing samples from the uniform random distribution."""
+    #     size = (num_samples, self.bounds.shape[1])
+    #     samples = np.random.uniform(self.bounds[0, :], self.bounds[1, :], size=size)
+    #     # Use float32 numpy -> torch conversion to match model dtype (float32)
+    #     return torch.as_tensor(samples.astype(np.float32), dtype=torch.float32, device=self.device)
+    
     def _sample(self, num_samples: int) -> torch.Tensor:
-        """Helper method for drawing samples from the uniform random distribution."""
-        size = (num_samples, self.bounds.shape[1])
-        samples = np.random.uniform(self.bounds[0, :], self.bounds[1, :], size=size)
-        # Use float32 numpy -> torch conversion to match model dtype (float32)
-        return torch.as_tensor(samples.astype(np.float32), dtype=torch.float32, device=self.device)
+        """支持三维数据的均匀分布采样（样本形状：(num_samples, d1, d2)）"""
+
+        # 计算样本形状：(num_samples, d1, d2)，其中 (d1, d2) 是 self.bounds 除第一维外的形状
+        size = (num_samples,) + self.bounds.shape[1:]  # 关键修改：用 self.bounds 的后几维作为数据维度
+        
+        # 从三维边界中采样：low 和 high 是 (d1, d2) 形状，与样本的空间维度匹配
+        samples = np.random.uniform(
+            low=self.bounds[0, ...],  # 三维下界：shape=(d1, d2)
+            high=self.bounds[1, ...],  # 三维上界：shape=(d1, d2)
+            size=size  # 最终样本形状：(num_samples, d1, d2)
+        )
+    
+        # 转换为张量
+        samples_tensor = torch.as_tensor(
+            samples.astype(np.float32),
+            dtype=torch.float32,
+            device=self.device
+        )
+        # print(f"样本形状：{samples_tensor.shape}")
+        
+        # 转换为 float32 张量并返回
+        return torch.as_tensor(
+            samples.astype(np.float32), 
+            dtype=torch.float32, 
+            device=self.device
+        )
 
     def sample(self, batch_size: int, ebm: nn.Module) -> torch.Tensor:
         del ebm  # The derivative-free optimizer does not use the ebm for sampling.

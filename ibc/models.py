@@ -66,6 +66,7 @@ class EBMMLP(nn.Module):
 
     def __init__(self, config: MLPConfig) -> None:
         super().__init__()
+        self.config = config
 
         dropout_layer: Callable
         if config.dropout_prob is not None:
@@ -97,10 +98,13 @@ class EBMMLP(nn.Module):
         # print("x.shape:", x.shape)  # 输出: [8, 1]
         # print("y.shape:", y.shape)  # 输出: [8, 16384, 1]
         fused = torch.cat([x.unsqueeze(1).expand(-1, y.size(1), -1), y], dim=-1)
+        # print("fused shape:", fused.shape)
         B, N, D = fused.size()
         fused = fused.reshape(B * N, D)
         out = self.net(fused)
-        return out.view(B, N)
+        out = out.view(B, N, self.config.output_dim)
+        energies = out.mean(dim=-1) # 平均所有输出维度作为能量值
+        return energies
     
     # def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     #     if self.coord_conv:
