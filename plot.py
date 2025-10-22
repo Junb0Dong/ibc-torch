@@ -125,6 +125,8 @@ def plot(
                 c="black",
             )
 
+
+
     plt.xlim(0 - 2, resolution[1] + 2)
     plt.ylim(0 - 2, resolution[0] + 2)
 
