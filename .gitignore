@@ -1,2 +1,8 @@
+# 忽略项目根目录下的 target 文件夹（递归忽略所有子文件/子文件夹）
+data/
+
+# 忽略 src 目录下的 logs 文件夹
+outputs/
+
+# 忽略任意目录下的 __pycache__ 文件夹（Python 编译缓存）
 __pycache__/
-experiments/
