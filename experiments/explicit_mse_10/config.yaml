@@ -1,0 +1,24 @@
+!!python/object:__main__.TrainConfig
+checkpoint_every_n_steps: 100
+coord_conv: true
+cudnn_benchmark: false
+cudnn_deterministic: true
+device_type: cuda
+dropout_prob: 0.1
+eval_every_n_steps: 1000
+experiment_name: explicit_mse_10
+learning_rate: 0.001
+log_every_n_steps: 10
+max_epochs: 2000
+num_workers: 1
+policy_type: !!python/object/apply:ibc.trainer.PolicyType
+- !!python/name:ibc.trainer.ExplicitTrainState ''
+seed: 0
+spatial_reduction: !!python/object/apply:ibc.models.SpatialReduction
+- !!python/name:ibc.modules.SpatialSoftArgmax ''
+stochastic_optimizer_train_samples: 64
+test_batch_size: 64
+test_dataset_size: 500
+train_batch_size: 8
+train_dataset_size: 10
+weight_decay: 0.0001

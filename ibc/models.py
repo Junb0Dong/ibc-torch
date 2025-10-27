@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from .modules import CoordConv, GlobalAvgPool2d, GlobalMaxPool2d, SpatialSoftArgmax
 
+# only run this file need rto add `export PYTHONPATH=$PWD`
 
 class ActivationType(enum.Enum):
     RELU = nn.ReLU
@@ -236,30 +237,30 @@ class EBMConvMLP(nn.Module):
 # export PYTHONPATH="$PWD"
 # python -m ibc.models
 if __name__ == "__main__":
-    # config = ConvMLPConfig(
-    #     cnn_config=CNNConfig(5),
-    #     mlp_config=MLPConfig(16, 128, 2, 2),
-    #     spatial_reduction=SpatialReduction.AVERAGE_POOL,
-    #     coord_conv=True,
-    # )
-
-    # net = ConvMLP(config)
-    # print(net)
-
-    # x = torch.randn(2, 3, 96, 96)
-    # with torch.no_grad():
-    #     out = net(x)
-    # print(out.shape)
-
-    config = MLPConfig(
-        input_dim=2, hidden_dim=128, output_dim=1, hidden_depth=3, dropout_prob=0.1
+    config = ConvMLPConfig(
+        cnn_config=CNNConfig(5),
+        mlp_config=MLPConfig(16, 128, 2, 2),
+        spatial_reduction=SpatialReduction.AVERAGE_POOL,
+        coord_conv=True,
     )
 
-    net = EBMMLP(config)
+    net = ConvMLP(config)
     print(net)
 
-    x = torch.randn(8, 1)
-    y = torch.randn(8, 1, 1)
+    x = torch.randn(2, 3, 96, 96)
     with torch.no_grad():
-        out = net(x, y)
+        out = net(x)
     print(out.shape)
+
+    # config = MLPConfig(
+    #     input_dim=2, hidden_dim=128, output_dim=1, hidden_depth=3, dropout_prob=0.1
+    # )
+
+    # net = EBMMLP(config)
+    # print(net)
+
+    # x = torch.randn(8, 1)
+    # y = torch.randn(8, 1, 1)
+    # with torch.no_grad():
+    #     out = net(x, y)
+    # print(out.shape)

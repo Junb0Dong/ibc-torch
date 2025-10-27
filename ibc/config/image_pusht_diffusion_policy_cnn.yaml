@@ -1,0 +1,153 @@
+_target_: ibc.workspace.train_ebm_cnn_hybrid_workspace.TrainEbmCnnHybridWorkspace
+checkpoint:
+  save_last_ckpt: true
+  save_last_snapshot: false
+  topk:
+    format_str: epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt
+    k: 5
+    mode: max
+    monitor_key: test_mean_score
+dataloader:
+  batch_size: 64
+  num_workers: 8
+  persistent_workers: false
+  pin_memory: true
+  shuffle: true
+dataset_obs_steps: 1
+exp_name: default
+horizon: 1
+keypoint_visible_rate: 1.0
+logging:
+  group: null
+  id: null
+  mode: online
+  name: train_ebm_cnn_hybrid_pusht_image
+  project: diffusion_policy_debug
+  resume: true
+  tags:
+  - train_ebm_cnn_hybrid
+  - pusht_image
+  - default
+n_latency_steps: 0
+n_obs_steps: 2
+name: train_ebm_cnn_hybrid
+obs_as_global_cond: true
+optimizer:
+  _target_: torch.optim.AdamW
+  betas:
+  - 0.95
+  - 0.999
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 1.0e-06
+past_action_visible: false
+policy:
+  _target_: ibc.policy.ebm_image_policy.EbmUnetHybridImagePolicy
+  input_dim: 16
+  output_dim: 1
+  hidden_dim: 256
+  hidden_depth: 4
+  dropout_prob: 1.0e-06
+  in_channels: 5
+  residual_blocks: [32,64,32]
+  target_bounds: [[-1, -1], [1, 1]]
+  stochastic_optimizer_train_samples: 64
+  device_type: 'cuda'
+  shape_meta:
+    action:
+      shape:
+      - 2
+    obs:
+      agent_pos:
+        shape:
+        - 2
+        type: low_dim
+      image:
+        shape:
+        - 3
+        - 96
+        - 96
+        type: rgb 
+shape_meta:
+  action:
+    shape:
+    - 2
+  obs:
+    agent_pos:
+      shape:
+      - 2
+      type: low_dim
+    image:
+      shape:
+      - 3
+      - 96
+      - 96
+      type: rgb
+task:
+  dataset:
+    _target_: dataset.pusht_image_dataset.PushTImageDataset
+    max_train_episodes: 90
+    pad_after: 7
+    pad_before: 1
+    seed: 42
+    val_ratio: 0.02
+    zarr_path: data/pusht/pusht_cchi_v7_replay.zarr
+  env_runner:
+    _target_: ibc.env_runner.pusht_image_runner.PushTImageRunner
+    fps: 10
+    legacy_test: true
+    max_steps: 300
+    n_action_steps: 8
+    n_envs: null
+    n_obs_steps: 2
+    n_test: 50
+    n_test_vis: 4
+    n_train: 6
+    n_train_vis: 2
+    past_action: false
+    test_start_seed: 100000
+    train_start_seed: 0
+  image_shape:
+  - 3
+  - 96
+  - 96
+  name: pusht_image
+  shape_meta:
+    action:
+      shape:
+      - 2
+    obs:
+      agent_pos:
+        shape:
+        - 2
+        type: low_dim
+      image:
+        shape:
+        - 3
+        - 96
+        - 96
+        type: rgb
+task_name: pusht_image
+training:
+  checkpoint_every: 50
+  debug: false
+  device: cuda:0
+  gradient_accumulate_every: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  max_train_steps: null
+  max_val_steps: null
+  num_epochs: 3000
+  resume: true
+  rollout_every: 50
+  sample_every: 5
+  seed: 42
+  tqdm_interval_sec: 1.0
+  use_ema: false
+  val_every: 1
+val_dataloader:
+  batch_size: 64
+  num_workers: 8
+  persistent_workers: false
+  pin_memory: true
+  shuffle: false
