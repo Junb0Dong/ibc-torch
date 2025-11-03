@@ -13,7 +13,7 @@ dataloader:
   persistent_workers: false
   pin_memory: true
   shuffle: true
-dataset_obs_steps: 1
+dataset_obs_steps: 2
 exp_name: default
 horizon: 1
 keypoint_visible_rate: 1.0
@@ -45,13 +45,13 @@ policy:
   _target_: ibc.policy.ebm_image_policy.EbmUnetHybridImagePolicy
   input_dim: 16
   output_dim: 1
-  hidden_dim: 256
+  hidden_dim: 1024
   hidden_depth: 4
   dropout_prob: 1.0e-06
   in_channels: 5
-  residual_blocks: [32,64,32]
+  residual_blocks: [32, 64, 128, 256]
   target_bounds: [[-1, -1], [1, 1]]
-  stochastic_optimizer_train_samples: 64
+  stochastic_optimizer_train_samples: 1024
   device_type: 'cuda'
   shape_meta:
     action:
@@ -100,10 +100,10 @@ task:
     n_action_steps: 8
     n_envs: null
     n_obs_steps: 2
-    n_test: 50
-    n_test_vis: 4
+    n_test: 24
+    n_test_vis: 2
     n_train: 6
-    n_train_vis: 2
+    n_train_vis: 1
     past_action: false
     test_start_seed: 100000
     train_start_seed: 0
@@ -129,7 +129,7 @@ task:
         type: rgb
 task_name: pusht_image
 training:
-  checkpoint_every: 50
+  checkpoint_every: 200
   debug: false
   device: cuda:0
   gradient_accumulate_every: 1
@@ -139,7 +139,7 @@ training:
   max_val_steps: null
   num_epochs: 3000
   resume: true
-  rollout_every: 50
+  rollout_every: 200
   sample_every: 5
   seed: 42
   tqdm_interval_sec: 1.0

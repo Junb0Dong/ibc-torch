@@ -152,53 +152,26 @@ class PushTImageDataset(BaseImageDataset):
         print(f"Action target bounds: {target_bounds}")
         return target_bounds
 
-
-
 def main():
     import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    # --- 1. 加载数据集 ---
     zarr_path = os.path.expanduser('/home/ps/ibc-torch/data/pusht/pusht_cchi_v7_replay.zarr')
-    dataset = PushTImageDataset(zarr_path, horizon=16)
-    # 获取一个样本（所有样本结构一致）
-    sample = dataset[0]
+    train_dataset = PushTImageDataset(zarr_path, val_ratio=0.02)
+    val_dataset = train_dataset.get_validation_dataset()
 
-    print(sample.keys())
+    n_episodes_total = len(train_dataset.replay_buffer.episode_ends)
+    n_train_episodes = train_dataset.train_mask.sum()
+    n_val_episodes = (~train_dataset.train_mask).sum()  # 或 val_dataset.train_mask.sum()
 
-    print("data['obs']:", sample['obs'])
-    print("data['action']:", sample['action'])
-    # 定义递归函数，收集所有键和shape
-    def get_all_keys(data, parent_key=''):
-        """
-        递归遍历字典，收集所有键（含嵌套键）及其对应数据的shape
-        data: 输入的字典（或嵌套字典）
-        parent_key: 父键（用于拼接嵌套键，如'obs' + 'image' -> 'obs.image'）
-        返回：字典，键为完整路径（如'obs.image'），值为对应的shape
-        """
-        result = {}
-        # 遍历当前层级的所有键
-        for key, value in data.items():
-            # 拼接完整键名（父键 + 当前键，用.分隔）
-            current_key = f"{parent_key}.{key}" if parent_key else key
-            # 如果值是字典（含嵌套结构），递归处理
-            if isinstance(value, dict):
-                # 递归获取子键的信息，并合并到结果中
-                result.update(get_all_keys(value, current_key))
-            else:
-                # 非字典值，获取其shape（假设是numpy数组或torch张量）
-                try:
-                    shape = value.shape
-                    result[current_key] = shape # dict
-                except AttributeError:
-                    # 若值没有shape（如标量），记录为None或提示
-                    result[current_key] = None  # 或 "scalar (no shape)"
-        return result
-
-    # 收集所有键和shape
-    all_keys = get_all_keys(sample)
-
-    # 打印结果
-    print("Dataset all keys and their shapes:")
-    for key, shape in all_keys.items():
-        print(f"{key}: {shape}")
+    print("========== Dataset Split ==========")
+    print(f"Total episodes: {n_episodes_total}")
+    print(f"Train episodes: {n_train_episodes}")
+    print(f"Val episodes:   {n_val_episodes}")
+    print(f"Val ratio:      {n_val_episodes / n_episodes_total:.2%}")
+    
 
 if __name__ == "__main__":
     main()

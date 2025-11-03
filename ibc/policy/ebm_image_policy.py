@@ -44,10 +44,10 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         # reducer returns 2 values per channel (x and y), so the reduced feature size
         # is 16 * 2 = 32. We concatenate the action_dim to this, so final mlp input
         # dim = 32 + action_dim.
-        conv_out_channels = 16
+        conv_out_channels = residual_blocks[-1]
         reduced_feat_dim = conv_out_channels * 2
         mlp_input_dim = reduced_feat_dim + action_dim
-
+        # TODO：检查下卷积的输出dim和action_dim，看一下卷积的输出数据是否和action能匹配得上
         mlp_config = models.MLPConfig(
             input_dim=mlp_input_dim,
             hidden_dim=hidden_dim,
@@ -61,8 +61,10 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
             mlp_config=mlp_config,
             spatial_reduction=models.SpatialReduction.SPATIAL_SOFTMAX,
         )
+        print("ConvMLP model config:", model_config)
 
         model = models.EBMConvMLP(config=model_config)
+        print("EBMConvMLP model:", model)
         model.to(_device)
         self.model = model
 
@@ -85,56 +87,44 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         
 
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        # print("in prediction obs_dict keys:", obs_dict.keys())
-        # print("in prediction obs_dict agent_pos shape:", obs_dict['agent_pos'].shape)  # (56, 2, 2)
-        # print("in prediction obs_dict image shape:", obs_dict['image'].shape)          # (56, 2, 3, 96, 96)
-
-        # 提取数据（原始维度：agent_pos是(B, T, D)，image是(B, T, C, H, W)）
         obs_agent_pos = obs_dict['agent_pos']  # (56, 2, 2)
         obs_image = obs_dict['image']          # (56, 2, 3, 96, 96)
 
-        # 处理时间维度：取第0个时间步（或根据需求取第1个，即[:, 1]）
-        T_idx = 0  # 选择第1个时间步（0-based索引）
-        obs_image = obs_image[:, T_idx]        # 处理后：(56, 3, 96, 96)（B, C, H, W）
-        obs_agent_pos = obs_agent_pos[:, T_idx]  # 处理后：(56, 2)（B, D）
+        # # 处理时间维度：取第0个时间步（或根据需求取第1个，即[:, 1]）
+        # T_idx = 0  # 选择第1个时间步（0-based索引）
+        # obs_image = obs_image[:, T_idx]        # 处理后：(56, 3, 96, 96)（B, C, H, W）
+        # obs_agent_pos = obs_agent_pos[:, T_idx]  # 处理后：(56, 2)（B, D）
 
-        # 归一化处理
+        # 归一化处理，image不需要归一化
         normalized_agent_pos = self.normalizer['agent_pos'].normalize(obs_agent_pos)  # (56, 2)
-        # normalized_image = obs_image / 255.0  # (56, 3, 96, 96)
+        
+        B, T, C, H, W = obs_image.shape
 
-        # 扩展agent位置维度以匹配图像
-        B, C, H, W = obs_image.shape  # 现在是4维，可正常解包
-        # print("normalized_image.shape:", normalized_image.shape)
-        # print("normalized_agent_pos.shape:", normalized_agent_pos.shape)
-        normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)  # (56, 2, 96, 96)
-        # print("normalized_agent_pos_expanded:", normalized_agent_pos_expanded)
+        normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, 1, H, W)  # (56, 2, 96, 96)
 
         # 拼接输入
-        input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=1)  # (56, 5, 96, 96)
+        input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=2)  # (56, 5, 96, 96)
 
-        pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model)
-        # action_expanded = action.unsqueeze(1)
 
-        # action = action.unnormalize(self.normalizer['action'])  # 反归一化
+        # 合并B和T维度，转为4D张量（符合conv2d输入要求）
+        input = input.flatten(0, 1)  # (B*T, C_total, H, W) → (56*2=112, 5, 96, 96)
 
-        # print("predicted normalized action_tensor before denormalize:", result)
+        # 模型推理
+        pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model)  # 此时输入为4D，正常运行
 
-        # # 2. 反归一化，恢复到环境需要的原始尺度
+        # 拆分B*T维度回原始的B和T（如果后续需要时间维度）
+        pre_action = pre_action.unflatten(0, (B, T))  # 例如(112, ...) → (56, 2, ...)
+
+        
+        # 反归一化，恢复到环境需要的原始尺度
         action_tensor = self.normalizer['action'].unnormalize(pre_action)
         
-        # # 3. 若动作有多余维度（如批次维度），根据环境需求处理
-        # # （如果是单环境，用 squeeze 去掉批次维；如果是批量环境，可保留）
-        # action_tensor = action_tensor.squeeze(0)  # 示例：去掉第0维（若批次维为1）
-        
-        # print("predicted action_tensor:", action_tensor)
-        # print("the shape of action_tensor:", action_tensor.shape)
-        # print("the type of action_tensor:", type(action_tensor))
 
-        action_tensor_expanded = action_tensor.unsqueeze(1)
+        # action_tensor_expanded = action_tensor.unsqueeze(1)
 
         result = {
-            'action': action_tensor_expanded,
-            'action_pred': action_tensor_expanded
+            'action': action_tensor,
+            'action_pred': action_tensor
         }
         return result
     # ========= training  ============
@@ -151,6 +141,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
 
         obs_agent_pos = batch['obs']['agent_pos']  # shape: (B, 2)，B为批次大小
         obs_image = batch['obs']['image']          # shape: (B, 1, 3, 96, 96)
+        
         obs_image = obs_image.squeeze(1)  # 去掉时间维度，变为 (B, 3, 96, 96)
         obs_agent_pos = obs_agent_pos.squeeze(1)  # 去掉时间维度，变为 (B, 2)，不考虑时间维度，纯粹的Markov Chain
 
@@ -170,8 +161,6 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         # negatives = self.normalizer['action'].normalize(negatives)
 
         # Merge target and negatives: (B, N+1, D).
-        # print("target size:", target.shape)
-        # print("negatives size:", negatives.shape)
         targets = torch.cat([target.unsqueeze(dim=1), negatives], dim=1)
 
         # Generate a random permutation of the positives and negatives.

@@ -38,23 +38,10 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
         super().__init__(cfg, output_dir=output_dir)    # inherit from father class __init__ method
 
         # set seed
-        seed = cfg.training.seed    # 在config中的training部分设置的随机种子
+        seed = cfg.training.seed
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
-
-
-        # configure dataset
-        dataset: BaseImageDataset # 定义一个BaseImageDatase类型的变量dataset
-        dataset = hydra.utils.instantiate(cfg.task.dataset) # 使用hydra.utils.instantiate方法实例化cfg.task.dataset
-        assert isinstance(dataset, BaseImageDataset)    # 断言dataset的类型是否BaseImageDataset
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)    # 创建训练数据加载器
-        
-        # # 步骤2：获取动态的target_bounds
-        # target_bounds = train_dataloader.dataset.get_target_bounds()
-        # print(f"动态获取的target_bounds: {target_bounds}")
-
-        # cfg.policy.target_bounds = target_bounds.tolist()  # 将动态获取的target_bounds赋值给cfg.policy.target_bounds
 
         # configure model
         self.model: EbmUnetHybridImagePolicy = hydra.utils.instantiate(cfg.policy)    # create instance of policy class
@@ -65,7 +52,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
 
         # configure training state
         self.optimizer = hydra.utils.instantiate(
-            cfg.optimizer, params=self.model.parameters())  # 优化器设置，使用config中的参数
+            cfg.optimizer, params=self.model.parameters())
 
         # configure training state
         self.global_step = 0
@@ -82,19 +69,19 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
                 self.load_checkpoint(path=lastest_ckpt_path)
 
         # configure dataset
-        dataset: BaseImageDataset # 定义一个BaseImageDatase类型的变量dataset
-        dataset = hydra.utils.instantiate(cfg.task.dataset) # 使用hydra.utils.instantiate方法实例化cfg.task.dataset
-        assert isinstance(dataset, BaseImageDataset)    # 断言dataset的类型是否BaseImageDataset
-        train_dataloader = DataLoader(dataset, **cfg.dataloader)    # 创建训练数据加载器
-        normalizer = dataset.get_normalizer()   # 获取数据集的归一化器
+        dataset: BaseImageDataset
+        dataset = hydra.utils.instantiate(cfg.task.dataset)
+        assert isinstance(dataset, BaseImageDataset)
+        train_dataloader = DataLoader(dataset, **cfg.dataloader)
+        normalizer = dataset.get_normalizer()
 
         print("type of normalizer:", type(normalizer))
         
         # configure validation dataset
-        val_dataset = dataset.get_validation_dataset() # 获取验证集
-        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader) # 使用配置文件中的参数，创建验证集的数据加载器
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
 
-        self.model.set_normalizer(normalizer) # 设置模型的归一化器
+        self.model.set_normalizer(normalizer)
         # if cfg.training.use_ema:
         #     self.ema_model.set_normalizer(normalizer)
 
@@ -118,7 +105,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
         #         model=self.ema_model)
 
         # configure env
-        env_runner: BaseImageRunner # 按照config的设置来实例化env_runner
+        env_runner: BaseImageRunner
         env_runner = hydra.utils.instantiate(
             cfg.task.env_runner,
             output_dir=self.output_dir)
@@ -142,7 +129,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
             **cfg.checkpoint.topk
         )
 
-        # device transfer 把模型和优化器转移到指定的设备上
+        # device transfer
         device = torch.device(cfg.training.device)
         self.model.to(device)
         # if self.ema_model is not None:
@@ -163,52 +150,52 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
             cfg.training.sample_every = 1
 
         # training loop
-        log_path = os.path.join(self.output_dir, 'logs.json.txt') # 定义日志文件路径，内容包括：train_loss，global_step，epoch，lr
+        log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger: # 使用JsonLogger类，将日志写入log_path文件
-            for local_epoch_idx in range(cfg.training.num_epochs): # 遍历训练的每个epoch
-                step_log = dict() # 定义一个字典，用于存储每个epoch的日志
+            for local_epoch_idx in range(cfg.training.num_epochs): # 训练轮数
+                step_log = dict()
                 # ========= train for this epoch ==========
-                train_losses = list() # 定义一个列表，用于存储每个batch的loss
-                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",  # 使用tqdm库，显示训练进度条
-                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
-                    for batch_idx, batch in enumerate(tepoch): # 遍历每个batch
+                train_losses = list()
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
+                        leave=False, tqdm_interval_sec=cfg.training.tqdm_interval_sec) as tepoch:
+                    for batch_idx, batch in enumerate(tepoch):  # 训练数据循环
                         # device transfer
-                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True)) #  将batch中的数据移动到指定设备上
-                        if train_sampling_batch is None: # 如果train_sampling_batch为空，则将batch赋值给它
+                        batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                        if train_sampling_batch is None:
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.model.compute_loss(batch) # 计算原始损失
-                        loss = raw_loss / cfg.training.gradient_accumulate_every # 将损失除以梯度累积次数
-                        loss.backward() # 反向传播
+                        raw_loss = self.model.compute_loss(batch)
+                        loss = raw_loss / cfg.training.gradient_accumulate_every
+                        loss.backward()
 
                         # step optimizer
                         if self.global_step % cfg.training.gradient_accumulate_every == 0:
-                            self.optimizer.step() # 执行优化器的step操作，更新模型参数
-                            self.optimizer.zero_grad() # 梯度清零
-                            lr_scheduler.step() # 学习率更新
+                            self.optimizer.step()
+                            self.optimizer.zero_grad()
+                            lr_scheduler.step()
                         
                         # update ema
                         # if cfg.training.use_ema:
-                        #     ema.step(self.model) # 更新EMA
+                        #     ema.step(self.model)
 
                         # logging
-                        raw_loss_cpu = raw_loss.item() # 将损失值转换为CPU上的浮点数
-                        tepoch.set_postfix(loss=raw_loss_cpu, refresh=False) # 设置训练损失值
-                        train_losses.append(raw_loss_cpu) # 将损失值添加到训练损失列表中
+                        raw_loss_cpu = raw_loss.item()
+                        tepoch.set_postfix(loss=raw_loss_cpu, refresh=False)
+                        train_losses.append(raw_loss_cpu)
                         step_log = {
-                            'train_loss': raw_loss_cpu, # 训练损失值
-                            'global_step': self.global_step, # 全局步数
-                            'epoch': self.epoch, # 当前轮数
+                            'train_loss': raw_loss_cpu,
+                            'global_step': self.global_step,
+                            'epoch': self.epoch,
                             'lr': lr_scheduler.get_last_lr()[0] # 当前学习率
                         }
 
-                        is_last_batch = (batch_idx == (len(train_dataloader)-1)) # 判断是否为最后一个batch
+                        is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:
                             # log of last step is combined with validation and rollout
-                            wandb_run.log(step_log, step=self.global_step) # 将训练日志记录到wandb
-                            json_logger.log(step_log) # 将训练日志记录到json文件
-                            self.global_step += 1 # 全局步数加1
+                            wandb_run.log(step_log, step=self.global_step)
+                            json_logger.log(step_log)
+                            self.global_step += 1
 
                         if (cfg.training.max_train_steps is not None) \
                             and batch_idx >= (cfg.training.max_train_steps-1):
@@ -223,25 +210,23 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
                 policy = self.model
                 # if cfg.training.use_ema:
                 #     policy = self.ema_model
-                policy.eval()   # NOTE：eval是干嘛的？ python Moulde中类属性访问，这里将policy设置为eval模式
+                policy.eval()
 
                 # run rollout
                 if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(policy)
                     # log all
-                    step_log.update(runner_log)
+                    step_log.update(runner_log) # provision mean_score
 
                 # run validation
                 if (self.epoch % cfg.training.val_every) == 0:
                     with torch.no_grad():
-                        val_losses = list() # 验证集损失
+                        val_losses = list()
                         with tqdm.tqdm(val_dataloader, desc=f"Validation epoch {self.epoch}", 
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
-                            for batch_idx, batch in enumerate(tepoch):
-                                # print("Validation batch agent_pos shape:", batch['obs']['agent_pos'].shape)
-                                # print("Validation batch image shape:", batch['obs']['image'].shape)
-                                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))    # lambda是一个匿名函数，这里将batch中的数据移动到指定设备上
-                                loss = self.model.compute_loss(batch)   # 计算验证集的损失
+                            for batch_idx, batch in enumerate(tepoch):  # batch from val dataloader
+                                batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
+                                loss = self.model.compute_loss(batch)
                                 val_losses.append(loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
@@ -253,24 +238,24 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
 
                 # run diffusion sampling on a training batch
                 if (self.epoch % cfg.training.sample_every) == 0:
-                    with torch.no_grad():   # 不进行梯度计算
+                    with torch.no_grad():
                         # sample trajectory from training set, and evaluate difference
                         batch = dict_apply(train_sampling_batch, lambda x: x.to(device, non_blocking=True))
                         obs_dict = batch['obs']
                         gt_action = batch['action'] # ground_truth action
                         
-                        result = policy.predict_action(obs_dict) #  使用策略预测动作
+                        result = policy.predict_action(obs_dict)
                         pred_action = result['action_pred']
-                        mse = torch.nn.functional.mse_loss(pred_action, gt_action) #  计算预测动作和真实动作之间的均方误差
+                        mse = torch.nn.functional.mse_loss(pred_action, gt_action)
                         step_log['train_action_mse_error'] = mse.item()
-                        del batch #  删除batch变量
-                        # del obs_dict
+                        del batch
+                        del obs_dict
                         del gt_action
                         del result
                         del pred_action
                         del mse
                 
-                # checkpoint 保存
+                # checkpoint 保存，得先rollout获得mean_score后才能保存，因此要和rollout_every保持一致
                 if (self.epoch % cfg.training.checkpoint_every) == 0:
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
@@ -306,7 +291,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
     config_path=str(pathlib.Path(__file__).parent.parent.joinpath("config")), 
     config_name=pathlib.Path(__file__).stem)
 def main(cfg):
-    workspace = TrainDiffusionUnetHybridWorkspace(cfg)
+    workspace = TrainEbmCnnHybridWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":

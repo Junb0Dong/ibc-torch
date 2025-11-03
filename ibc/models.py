@@ -158,7 +158,7 @@ class CNN(nn.Module):
         for depth_out in config.blocks:
             layers.extend(
                 [
-                    nn.Conv2d(depth_in, depth_out, 3, padding=1),
+                    nn.Conv2d(depth_in, depth_out, kernel_size=3, stride=2, padding=1),
                     ResidualBlock(depth_out, config.activation_fn),
                 ]
             )
@@ -216,7 +216,7 @@ class EBMConvMLP(nn.Module):
         self.coord_conv = config.coord_conv
 
         self.cnn = CNN(config.cnn_config)
-        self.conv = nn.Conv2d(config.cnn_config.blocks[-1], 16, 1)
+        # self.conv = nn.Conv2d(config.cnn_config.blocks[-1], 16, 1)
         self.reducer = config.spatial_reduction.value()
         self.mlp = MLP(config.mlp_config)
 
@@ -224,7 +224,7 @@ class EBMConvMLP(nn.Module):
         if self.coord_conv:
             x = CoordConv()(x)
         out = self.cnn(x, activate=True)
-        out = F.relu(self.conv(out))
+        # out = F.relu(self.conv(out))
         out = self.reducer(out)
         fused = torch.cat([out.unsqueeze(1).expand(-1, y.size(1), -1), y], dim=-1)
         B, N, D = fused.size()

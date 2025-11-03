@@ -35,7 +35,7 @@ class BaseWorkspace:
     def save_checkpoint(self, path=None, tag='latest', 
             exclude_keys=None,
             include_keys=None,
-            use_thread=True):
+            use_thread=False):
         if path is None:
             path = pathlib.Path(self.output_dir).joinpath('checkpoints', f'{tag}.ckpt')
         else:
