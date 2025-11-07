@@ -42,7 +42,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
 
 
         # 网络设置 obs -> CNN_output + action -> MLP -> action
-        cnn_config = models.CNNConfig(in_channels, residual_blocks) # CNN配置
+        cnn_config = models.CNNConfig(in_channels, residual_blocks)
 
         # The ConvMLP's conv layer projects to 16 channels and the SpatialSoftArgmax
         # reducer returns 2 values per channel (x and y), so the reduced feature size
@@ -50,7 +50,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         # dim = 32 + action_dim.
         conv_out_channels = residual_blocks[-1]
         reduced_feat_dim = conv_out_channels * 2
-        mlp_input_dim = reduced_feat_dim + action_dim
+        mlp_input_dim = reduced_feat_dim + action_dim*2 # 加上了agent_pos的维度
         # TODO：检查下卷积的输出dim和action_dim，看一下卷积的输出数据是否和action能匹配得上
         mlp_config = models.MLPConfig(
             input_dim=mlp_input_dim,
@@ -102,7 +102,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
         input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=1)  
 
-        pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model)  # 此时输入为4D，正常运行
+        pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model, normalized_agent_pos)  # 此时输入为4D，正常运行
 
         # 反归一化，恢复到环境需要的原始尺度
         action_tensor = self.normalizer['action'].unnormalize(pre_action)
@@ -166,7 +166,8 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         logits = -1.0 * energy
         loss = F.cross_entropy(logits, ground_truth)
         return loss
-    
+
+    # TODO：添加last_action信息 
     def InfoNCE_loss(self, batch, progress, training=True):
         obs_agent_pos = batch['obs']['agent_pos'].squeeze(1)
         obs_image = batch['obs']['image'].squeeze(1)
@@ -178,14 +179,16 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
 
         # Positive samples: shape (B, 1, action_dim)
         positive = self.normalizer['action'].normalize(batch['action'])
-        E_pos = self.model(input, positive)  # (B, 1)
+        positive_pos = torch.cat([positive, normalized_agent_pos.unsqueeze(1).repeat(1, positive.size(1), 1)], dim=-1)  # 将agent_pos信息拼接到动作上
+        E_pos = self.model(input, positive_pos)  # (B, 1)
 
         # Negative samples with curriculum learning
         # neg_samples, E_neg = self.stochastic_optimizer.negative_infer(
         #     input.to(self._device), progress, self.model
         # )
-        negative = self.stochastic_optimizer.negative_sample(input.size(0), self.model)
-        E_neg = self.model(input, negative)  # (B, N_neg)
+        negative = self.stochastic_optimizer.negative_sample(input.size(0), self.model) # (B, N_neg, action_dim)
+        negative_pos = torch.cat([negative, normalized_agent_pos.unsqueeze(1).repeat(1, negative.size(1), 1)], dim=-1)
+        E_neg = self.model(input, negative_pos)
 
         if E_neg.mean() < E_pos.mean():
             print(f"[Warning] E_neg ({E_neg.mean().item():.3f}) < E_pos ({E_pos.mean().item():.3f}) at progress={progress:.2f}")

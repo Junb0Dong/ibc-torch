@@ -142,7 +142,7 @@ class DerivativeFreeOptimizer:
         return samples.reshape(batch_size, self.negative_samples, -1)
 
     @torch.no_grad()
-    def infer(self, x: torch.Tensor, ebm: nn.Module) -> torch.Tensor:
+    def infer(self, x: torch.Tensor, ebm: nn.Module, agent_pos) -> torch.Tensor:
         """Optimize for the best action given a trained EBM."""
         noise_scale = self.noise_scale
         # Make sure bounds tensor matches the dtype of the samples and model (float32)
@@ -153,7 +153,8 @@ class DerivativeFreeOptimizer:
 
         for i in range(self.iters):
             # Compute energies.
-            energies = ebm(x, samples)
+            samples_pos = torch.cat([samples, agent_pos.unsqueeze(1).repeat(1, samples.size(1), 1)], dim=-1)
+            energies = ebm(x, samples_pos)
             probs = F.softmax(-energies, dim=-1)
 
             # Resample with replacement.
@@ -167,13 +168,14 @@ class DerivativeFreeOptimizer:
             noise_scale *= self.noise_shrink
 
         # Return target with highest probability.
-        energies = ebm(x, samples)
+        samples_pos = torch.cat([samples, agent_pos.unsqueeze(1).repeat(1, samples.size(1), 1)], dim=-1)
+        energies = ebm(x, samples_pos)
         probs = F.softmax(-1.0 * energies, dim=-1)
         best_idxs = probs.argmax(dim=-1)
         return samples[torch.arange(samples.size(0)), best_idxs, :]
     
     @torch.no_grad()
-    def negative_infer(self, x: torch.Tensor, progress, ebm: nn.Module) -> tuple[torch.Tensor, torch.Tensor]:
+    def negative_infer(self, x: torch.Tensor, progress, ebm: nn.Module, agent_pos) -> tuple[torch.Tensor, torch.Tensor]:
         # Curriculum: start with random, gradually increase difficulty
         sampling_config = self._get_sampling_config(progress)
 
@@ -188,12 +190,14 @@ class DerivativeFreeOptimizer:
 
         # Early training: use random negatives (iters=0)
         if current_iters == 0:
-            energies = ebm(x, samples)
+            samples_pos = torch.cat([samples, agent_pos.unsqueeze(1).repeat(1, samples.size(1), 1)], dim=-1)
+            energies = ebm(x, samples_pos)
             return samples, energies
 
         for i in range(current_iters):
             # Compute energy for all current negative samples
-            energies = ebm(x, samples)  # (B, N_neg)
+            samples_pos = torch.cat([samples, agent_pos.unsqueeze(1).repeat(1, samples.size(1), 1)], dim=-1)
+            energies = ebm(x, samples_pos)  # (B, N_neg)
 
             # Select hard negatives: low energy but still negatives
             # Temperature controls hardness: higher T = softer selection
@@ -211,7 +215,8 @@ class DerivativeFreeOptimizer:
             current_noise_scale *= current_noise_shrink
 
         # Final energy evaluation for all negative samples
-        energies = ebm(x, samples)  # (B, N_neg)
+        samples_pos = torch.cat([samples, agent_pos.unsqueeze(1).repeat(1, samples.size(1), 1)], dim=-1)
+        energies = ebm(x, samples_pos)  # (B, N_neg)
 
         return samples, energies
 

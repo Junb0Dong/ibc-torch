@@ -54,7 +54,7 @@ policy:
   residual_blocks: [32, 64, 128, 256]
   target_bounds: [[-1, -1], [1, 1]]
   infer_samples: 2048
-  negative_samples: 256 
+  negative_samples: 32 
   device_type: 'cuda'
   shape_meta:
     action:
@@ -140,7 +140,7 @@ training:
   lr_warmup_steps: 500
   max_train_steps: null
   max_val_steps: null
-  num_epochs: 2000
+  num_epochs: 1000
   resume: true
   rollout_every: 50
   sample_every: 5

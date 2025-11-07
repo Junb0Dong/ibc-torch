@@ -270,7 +270,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
                             snapshot_path = self.save_snapshot(use_thread=False)  # 禁用线程
                             if snapshot_path is None:
                                 print(f"Failed to save snapshot at epoch {self.epoch}")
-                        
+
                         # 处理指标并保存topk检查点
                         metric_dict = {key.replace('/', '_'): value for key, value in step_log.items()}
                         topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
