@@ -153,11 +153,12 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger: # 使用JsonLogger类，将日志写入log_path文件
             for local_epoch_idx in range(cfg.training.num_epochs): # 训练轮数
+                progress = local_epoch_idx / cfg.training.num_epochs
                 step_log = dict()
                 # ========= train for this epoch ==========
                 train_losses = list()
                 with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
-                        leave=False, tqdm_interval_sec=cfg.training.tqdm_interval_sec) as tepoch:
+                        leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):  # 训练数据循环
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
@@ -165,7 +166,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
                             train_sampling_batch = batch
 
                         # compute loss
-                        raw_loss = self.model.compute_loss(batch)
+                        raw_loss = self.model.InfoNCE_loss(batch, progress)
                         loss = raw_loss / cfg.training.gradient_accumulate_every
                         loss.backward()
 
@@ -226,7 +227,7 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             for batch_idx, batch in enumerate(tepoch):  # batch from val dataloader
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
-                                loss = self.model.compute_loss(batch)
+                                loss = self.model.InfoNCE_loss(batch, progress)
                                 val_losses.append(loss)
                                 if (cfg.training.max_val_steps is not None) \
                                     and batch_idx >= (cfg.training.max_val_steps-1):
@@ -257,25 +258,30 @@ class TrainEbmCnnHybridWorkspace(BaseWorkspace): # 从基类BaseWorkspace继承
                 
                 # checkpoint 保存，得先rollout获得mean_score后才能保存，因此要和rollout_every保持一致
                 if (self.epoch % cfg.training.checkpoint_every) == 0:
-                    # checkpointing
-                    if cfg.checkpoint.save_last_ckpt:
-                        self.save_checkpoint()
-                    if cfg.checkpoint.save_last_snapshot:
-                        self.save_snapshot()
-
-                    # sanitize metric names
-                    metric_dict = dict()
-                    for key, value in step_log.items():
-                        new_key = key.replace('/', '_')
-                        metric_dict[new_key] = value
-                    
-                    # We can't copy the last checkpoint here
-                    # since save_checkpoint uses threads.
-                    # therefore at this point the file might have been empty!
-                    topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
-
-                    if topk_ckpt_path is not None:
-                        self.save_checkpoint(path=topk_ckpt_path)
+                    try:
+                        # 先保存常规检查点
+                        if cfg.checkpoint.save_last_ckpt:
+                            last_ckpt_path = self.save_checkpoint(use_thread=False)  # 禁用线程
+                            if last_ckpt_path is None:
+                                print(f"Failed to save checkpoint at epoch {self.epoch}")
+                        
+                        # 再保存快照
+                        if cfg.checkpoint.save_last_snapshot:
+                            snapshot_path = self.save_snapshot(use_thread=False)  # 禁用线程
+                            if snapshot_path is None:
+                                print(f"Failed to save snapshot at epoch {self.epoch}")
+                        
+                        # 处理指标并保存topk检查点
+                        metric_dict = {key.replace('/', '_'): value for key, value in step_log.items()}
+                        topk_ckpt_path = topk_manager.get_ckpt_path(metric_dict)
+                        
+                        if topk_ckpt_path is not None:
+                            topk_path = self.save_checkpoint(path=topk_ckpt_path, use_thread=False)
+                            if topk_path is None:
+                                print(f"Failed to save topk checkpoint at epoch {self.epoch}")
+                                
+                    except Exception as e:
+                        print(f"Checkpoint saving failed at epoch {self.epoch}: {e}")
                 # ========= eval end for this epoch ==========
                 policy.train()  #设置policy为训练模式
 

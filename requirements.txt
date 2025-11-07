@@ -1,7 +1,0 @@
-dcargs
-torch
-torchvision
-matplotlib
-tqdm
-tensorboard
-scipy

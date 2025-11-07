@@ -16,6 +16,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
     def __init__(self,
         shape_meta: dict,   # TODO：粉墨登场
         input_dim: int,
+        n_action_steps: int,
         output_dim: int,
         hidden_dim: int,
         hidden_depth: int,
@@ -23,14 +24,17 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         in_channels: int,
         residual_blocks: List[int],
         target_bounds:  torch.Tensor,
-        stochastic_optimizer_train_samples: int,
+        # stochastic_optimizer_train_samples: int,
+        infer_samples: int,
+        negative_samples: int,
         device_type: str = "cuda",
         ):
         super().__init__()
         _device = torch.device(device_type if torch.cuda.is_available() else "cpu")
         print(f"Using device: {_device}")
         self._device = _device
-
+        self.n_action_steps = n_action_steps
+        
         # shape设置
         action_shape = shape_meta['action']['shape']
         assert len(action_shape) == 1
@@ -75,7 +79,8 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         target_bounds = torch.tensor(target_bounds, dtype=torch.float32)
         stochastic_optim_config = optimizers.DerivativeFreeConfig(
             bounds=target_bounds,
-            train_samples=stochastic_optimizer_train_samples,
+            infer_samples=infer_samples,
+            negative_samples=negative_samples,
         )
 
         self.stochastic_optimizer = optimizers.DerivativeFreeOptimizer.initialize(
@@ -87,46 +92,26 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         
 
     def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        obs_agent_pos = obs_dict['agent_pos']  # (56, 2, 2)
-        obs_image = obs_dict['image']          # (56, 2, 3, 96, 96)
-
-        # # 处理时间维度：取第0个时间步（或根据需求取第1个，即[:, 1]）
-        # T_idx = 0  # 选择第1个时间步（0-based索引）
-        # obs_image = obs_image[:, T_idx]        # 处理后：(56, 3, 96, 96)（B, C, H, W）
-        # obs_agent_pos = obs_agent_pos[:, T_idx]  # 处理后：(56, 2)（B, D）
+        obs_agent_pos = obs_dict['agent_pos'][:, -1]
+        obs_image = obs_dict['image'][:, -1]
 
         # 归一化处理，image不需要归一化
-        normalized_agent_pos = self.normalizer['agent_pos'].normalize(obs_agent_pos)  # (56, 2)
+        normalized_agent_pos = self.normalizer['agent_pos'].normalize(obs_agent_pos)
         
-        B, T, C, H, W = obs_image.shape
+        B, C, H, W = obs_image.shape
+        normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
+        input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=1)  
 
-        normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, 1, H, W)  # (56, 2, 96, 96)
-
-        # 拼接输入
-        input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=2)  # (56, 5, 96, 96)
-
-
-        # 合并B和T维度，转为4D张量（符合conv2d输入要求）
-        input = input.flatten(0, 1)  # (B*T, C_total, H, W) → (56*2=112, 5, 96, 96)
-
-        # 模型推理
         pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model)  # 此时输入为4D，正常运行
 
-        # 拆分B*T维度回原始的B和T（如果后续需要时间维度）
-        pre_action = pre_action.unflatten(0, (B, T))  # 例如(112, ...) → (56, 2, ...)
-
-        
         # 反归一化，恢复到环境需要的原始尺度
         action_tensor = self.normalizer['action'].unnormalize(pre_action)
-        
+        action_tensor = action_tensor.unsqueeze(1).repeat(1, self.n_action_steps, 1)
 
-        # action_tensor_expanded = action_tensor.unsqueeze(1)
-
-        result = {
+        return {
             'action': action_tensor,
             'action_pred': action_tensor
         }
-        return result
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):
         """
@@ -156,7 +141,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         target = target.squeeze(1)  # 去掉时间维度，变为 (B, action_dim)
 
         # Generate N negatives, one for each element in the batch: (B, N, D).
-        negatives = self.stochastic_optimizer.sample(input.size(0), self.model)
+        negatives = self.stochastic_optimizer.negative_sample(input.size(0), self.model)
         # 对动作进行归一化了后，对negatives也进行归一化
         # negatives = self.normalizer['action'].normalize(negatives)
 
@@ -182,3 +167,38 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         loss = F.cross_entropy(logits, ground_truth)
         return loss
     
+    def InfoNCE_loss(self, batch, progress, training=True):
+        obs_agent_pos = batch['obs']['agent_pos'].squeeze(1)
+        obs_image = batch['obs']['image'].squeeze(1)
+        normalized_agent_pos = self.normalizer['agent_pos'].normalize(obs_agent_pos)
+
+        B, C, H, W = obs_image.shape
+        normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
+        input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=1)
+
+        # Positive samples: shape (B, 1, action_dim)
+        positive = self.normalizer['action'].normalize(batch['action'])
+        E_pos = self.model(input, positive)  # (B, 1)
+
+        # Negative samples with curriculum learning
+        # neg_samples, E_neg = self.stochastic_optimizer.negative_infer(
+        #     input.to(self._device), progress, self.model
+        # )
+        negative = self.stochastic_optimizer.negative_sample(input.size(0), self.model)
+        E_neg = self.model(input, negative)  # (B, N_neg)
+
+        if E_neg.mean() < E_pos.mean():
+            print(f"[Warning] E_neg ({E_neg.mean().item():.3f}) < E_pos ({E_pos.mean().item():.3f}) at progress={progress:.2f}")
+
+        # Concatenate energies: [E_pos | E_neg]
+        E_all = torch.cat([E_pos, E_neg], dim=1)  # (B, N_neg+1)
+
+        # InfoNCE loss using stable logsumexp
+        logits = -E_all  # (B, N_neg+1)
+        log_sum_exp = torch.logsumexp(logits, dim=1, keepdim=True)  # (B, 1)
+        log_prob_pos = logits[:, 0:1] - log_sum_exp  # (B, 1)
+
+        # Negative log likelihood
+        loss = -log_prob_pos.mean()
+
+        return loss

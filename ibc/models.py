@@ -26,6 +26,26 @@ class MLPConfig:
     activation_fn: ActivationType = ActivationType.RELU
 
 
+def pos_to_heatmap(agent_pos, H, W, sigma=0.1):
+    """
+    agent_pos: (B, 2) in [-1, 1]  -> normalized coordinates
+    returns: (B, 1, H, W)  Gaussian heatmap
+    """
+    B = agent_pos.size(0)
+    device = agent_pos.device
+
+    # Create coordinate grid in [-1, 1]
+    ys = torch.linspace(-1, 1, H, device=device)
+    xs = torch.linspace(-1, 1, W, device=device)
+    yy, xx = torch.meshgrid(ys, xs, indexing='ij')
+    grid = torch.stack([xx, yy], dim=0).unsqueeze(0)  # (1, 2, H, W)
+
+    # Compute Gaussian centered at agent_pos
+    pos = agent_pos.view(B, 2, 1, 1)
+    dist = torch.sum((grid - pos) ** 2, dim=1, keepdim=True)
+    heatmap = torch.exp(-dist / (2 * sigma ** 2))
+    return heatmap
+
 class MLP(nn.Module):
     """A feedforward multi-layer perceptron."""
 
@@ -158,8 +178,9 @@ class CNN(nn.Module):
         for depth_out in config.blocks:
             layers.extend(
                 [
-                    nn.Conv2d(depth_in, depth_out, kernel_size=3, stride=2, padding=1),
+                    nn.Conv2d(depth_in, depth_out, kernel_size=3, stride=1, padding=1),
                     ResidualBlock(depth_out, config.activation_fn),
+                    nn.MaxPool2d(2),
                 ]
             )
             depth_in = depth_out
@@ -221,8 +242,17 @@ class EBMConvMLP(nn.Module):
         self.mlp = MLP(config.mlp_config)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        if self.coord_conv:
-            x = CoordConv()(x)
+        
+        obs_image = x[:, :3, :, :]  # (B, 3, 96, 96)
+        obs_agent_pos = x[:, 3:5, :1, :1]   # (B, 2)
+        
+        heatmap = pos_to_heatmap(obs_agent_pos, H=96, W=96, sigma=0.1)
+        x = torch.cat([obs_image, heatmap], dim=1)  # (B, 4, 96, 96)
+
+        # 再送入 CNN
+        # features = self.cnn(x)  # (B, C, H', W')
+        # if self.coord_conv:
+        #     x = CoordConv()(x)
         out = self.cnn(x, activate=True)
         # out = F.relu(self.conv(out))
         out = self.reducer(out)

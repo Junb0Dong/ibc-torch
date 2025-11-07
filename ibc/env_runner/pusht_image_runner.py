@@ -71,10 +71,10 @@ class PushTImageRunner(BaseImageRunner):
                 max_episode_steps=max_steps
             )
 
-        env_fns = [env_fn] * n_envs # 创建n_envs个环境
-        env_seeds = list()  # 环境的随机种子
-        env_prefixs = list()    # 环境的初始化函数
-        env_init_fn_dills = list()  # 环境的初始化函数的dill序列化
+        env_fns = [env_fn] * n_envs # 创建多个并行环境
+        env_seeds = list()
+        env_prefixs = list()    # 环境的标签前缀，用来区分train/test
+        env_init_fn_dills = list()  # 用 dill 序列化成 bytes，方便异步环境传递执行
         # train
         for i in range(n_train):
             seed = train_start_seed + i
@@ -147,16 +147,16 @@ class PushTImageRunner(BaseImageRunner):
         self.past_action = past_action
         self.max_steps = max_steps
         self.tqdm_interval_sec = tqdm_interval_sec
-    
+
     def run(self, policy: BaseImagePolicy):
         device = policy.device
         dtype = policy.dtype
         env = self.env
 
         # plan for rollout
-        n_envs = len(self.env_fns)  # 环境数量
+        n_envs = len(self.env_fns)  # n_test + n_train
         n_inits = len(self.env_init_fn_dills)   # 初始化函数的数量
-        n_chunks = math.ceil(n_inits / n_envs)  # 计算需要运行的轮数
+        n_chunks = math.ceil(n_inits / n_envs)
 
         # allocate data
         all_video_paths = [None] * n_inits
@@ -199,9 +199,6 @@ class PushTImageRunner(BaseImageRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
-                # print("the keys of obs_dict:", obs_dict.keys())
-                # print("obs_dict agent_pos shape:", obs_dict['agent_pos'].shape)
-                # print("obs_dict image shape:", obs_dict['image'].shape)
 
                 # run policy
                 with torch.no_grad():

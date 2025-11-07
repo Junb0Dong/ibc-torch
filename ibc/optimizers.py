@@ -37,7 +37,8 @@ class StochasticOptimizerConfig:
     iters: int
     """The total number of inference iters."""
 
-    train_samples: int
+    infer_samples: int
+    negative_samples: int
     """The number of counter-examples to sample per iter during training."""
 
     inference_samples: int
@@ -61,7 +62,8 @@ class DerivativeFreeConfig(StochasticOptimizerConfig):
     noise_scale: float = 0.33
     noise_shrink: float = 0.5
     iters: int = 3
-    train_samples: int = 256
+    infer_samples: int = 256    # 采样数量
+    negative_samples: int = 256  # 负样本数量
     inference_samples: int = 2 ** 14
 
 
@@ -73,7 +75,8 @@ class DerivativeFreeOptimizer:
     noise_scale: float
     noise_shrink: float
     iters: int
-    train_samples: int
+    infer_samples: int
+    negative_samples: int
     inference_samples: int
     bounds: np.ndarray
 
@@ -86,7 +89,8 @@ class DerivativeFreeOptimizer:
             noise_scale=config.noise_scale,
             noise_shrink=config.noise_shrink,
             iters=config.iters,
-            train_samples=config.train_samples,
+            infer_samples=config.infer_samples,
+            negative_samples=config.negative_samples,
             inference_samples=config.inference_samples,
             # Ensure bounds are float32 to avoid dtype mismatches with model FloatTensors
             bounds=config.bounds.astype("float32") if isinstance(config.bounds, np.ndarray) else config.bounds,
@@ -129,8 +133,13 @@ class DerivativeFreeOptimizer:
 
     def sample(self, batch_size: int, ebm: nn.Module) -> torch.Tensor:
         del ebm  # The derivative-free optimizer does not use the ebm for sampling.
-        samples = self._sample(batch_size * self.train_samples)
-        return samples.reshape(batch_size, self.train_samples, -1)
+        samples = self._sample(batch_size * self.infer_samples)
+        return samples.reshape(batch_size, self.infer_samples, -1)
+    
+    def negative_sample(self, batch_size: int, ebm: nn.Module) -> torch.Tensor:
+        del ebm  # The derivative-free optimizer does not use the ebm for sampling.
+        samples = self._sample(batch_size * self.negative_samples)
+        return samples.reshape(batch_size, self.negative_samples, -1)
 
     @torch.no_grad()
     def infer(self, x: torch.Tensor, ebm: nn.Module) -> torch.Tensor:
@@ -139,16 +148,16 @@ class DerivativeFreeOptimizer:
         # Make sure bounds tensor matches the dtype of the samples and model (float32)
         bounds = torch.as_tensor(self.bounds, dtype=torch.float32, device=self.device)
 
-        samples = self._sample(x.size(0) * self.inference_samples)
-        samples = samples.reshape(x.size(0), self.inference_samples, -1)
+        samples = self._sample(x.size(0) * self.infer_samples)
+        samples = samples.reshape(x.size(0), self.infer_samples, -1)
 
         for i in range(self.iters):
             # Compute energies.
             energies = ebm(x, samples)
-            probs = F.softmax(-1.0 * energies, dim=-1)
+            probs = F.softmax(-energies, dim=-1)
 
             # Resample with replacement.
-            idxs = torch.multinomial(probs, self.inference_samples, replacement=True)
+            idxs = torch.multinomial(probs, self.infer_samples, replacement=True)
             samples = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs]
 
             # Add noise and clip to target bounds.
@@ -162,6 +171,81 @@ class DerivativeFreeOptimizer:
         probs = F.softmax(-1.0 * energies, dim=-1)
         best_idxs = probs.argmax(dim=-1)
         return samples[torch.arange(samples.size(0)), best_idxs, :]
+    
+    @torch.no_grad()
+    def negative_infer(self, x: torch.Tensor, progress, ebm: nn.Module) -> tuple[torch.Tensor, torch.Tensor]:
+        # Curriculum: start with random, gradually increase difficulty
+        sampling_config = self._get_sampling_config(progress)
+
+        current_iters = sampling_config['iters']
+        current_noise_scale = sampling_config['noise_scale']
+        current_noise_shrink = sampling_config['noise_shrink']
+
+        bounds = torch.as_tensor(self.bounds, dtype=torch.float32, device=self.device)
+
+        # Initial negative samples: (B, N_neg, act_dim)
+        samples = self.negative_sample(x.size(0), ebm)
+
+        # Early training: use random negatives (iters=0)
+        if current_iters == 0:
+            energies = ebm(x, samples)
+            return samples, energies
+
+        for i in range(current_iters):
+            # Compute energy for all current negative samples
+            energies = ebm(x, samples)  # (B, N_neg)
+
+            # Select hard negatives: low energy but still negatives
+            # Temperature controls hardness: higher T = softer selection
+            temperature = 1.0 + (1 - progress) * 2.0  # T: 3.0 → 1.0
+            probs = F.softmax(-energies / temperature, dim=-1)
+
+            # Resample indices based on energy-based probabilities
+            idxs = torch.multinomial(probs, self.negative_samples, replacement=True)
+            samples = samples[torch.arange(samples.size(0)).unsqueeze(-1), idxs]
+
+            # Add Gaussian exploration noise and clamp
+            samples = samples + torch.randn_like(samples) * current_noise_scale
+            samples = samples.clamp(min=bounds[0, :], max=bounds[1, :])
+
+            current_noise_scale *= current_noise_shrink
+
+        # Final energy evaluation for all negative samples
+        energies = ebm(x, samples)  # (B, N_neg)
+
+        return samples, energies
+
+    def _get_sampling_config(self, progress):
+        """
+        根据训练进度返回采样配置。
+
+        Curriculum strategy:
+        - Early (0-30%): Random negatives to learn basic discrimination
+        - Mid (30-70%): Medium difficulty with some refinement
+        - Late (70-100%): Hard negatives with full refinement
+        """
+        if progress < 0.15:  # Early training: random to easy negatives
+            return {
+                'iters': 0 if progress < 0.1 else max(1, self.iters // 3),
+                'noise_scale': 0.0 if progress < 0.1 else self.noise_scale * 1.5,
+                'noise_shrink': 1.0 if progress < 0.1 else 0.7,
+                'difficulty': 'easy'
+            }
+        elif progress < 0.6:  # Mid training: medium difficulty
+            return {
+                'iters': max(1, self.iters // 2),
+                'noise_scale': self.noise_scale,
+                'noise_shrink': self.noise_shrink,
+                'difficulty': 'medium'
+            }
+        else:  # Late training: hard negatives
+            return {
+                'iters': self.iters,
+                'noise_scale': self.noise_scale * 0.5,
+                'noise_shrink': 0.9,
+                'difficulty': 'hard'
+            }
+
 
 
 class StochasticOptimizerType(enum.Enum):

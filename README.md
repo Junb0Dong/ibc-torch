@@ -66,6 +66,15 @@ python版本为3.8
 **10.31**
 验证集为4条，主要是测量mes_action，在eval的时候则是env_runner随机初始化blockT的位置。
 
+**11.04**
+找到较为关键的问题：预测动作的`n_action_steps`在predict_action中action的T为`n_obs_steps`的`T`而不是为`n_action_steps`的T。所以现在最直觉的解决问题的方法就是将`n_obs_steps`和`n_action_steps`都设置为1,这样最符合Markov的设定。
+> 这也是直接在DP的基础上写代码埋的坑。训练了200轮，检查结果发现，`n_action_steps = 8`时，agent一抽一抽的，符合我的预测。
+
+又因为CNN+MLP是Markov的，所以`n_obs_steps`和`n_action_steps`是没有什么实际的意义的，但可以做实验来验证一下。
+- 验证单步的observation能否预测未来多步的action，这需要修改采样优化中的代码（跟随n_action_steps进行采样）
+
+
+
 **待验证的问题**
 IBC的极限在哪里？能否承担起带有时序的功能？
 
