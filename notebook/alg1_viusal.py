@@ -1,10 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import matplotlib.font_manager as fm
 
 # 设置中文显示
-plt.rcParams["font.family"] = ["SimHei", "WenQuanYi Micro Hei", "Heiti TC"]
-plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
+fm.fontManager.addfont('/home/cxm/NotoSansCJKsc-Regular.otf')
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC']
+plt.rcParams['axes.unicode_minus'] = False
 
 # 能量函数（示例：二维空间中的非凸函数，包含多个局部最小值）
 def energy_function(a):
@@ -15,7 +17,7 @@ def energy_function(a):
     return term1 + term2 + term3
 
 # 优化器函数，保存每轮迭代的样本和能量
-def derivative_free_optimizer_track(N_samples=100, N_iters=10, sigma_init=0.33, K=0.5, a_min=-1, a_max=1):
+def derivative_free_optimizer_track(N_samples=100, N_iters=10, sigma_init=0.33, K=0.2, a_min=-1, a_max=1):
     samples = np.random.uniform(a_min, a_max, (N_samples, 2))  # 初始样本（二维）
     sigma = sigma_init
     history = []
