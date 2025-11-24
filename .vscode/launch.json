@@ -1,24 +1,65 @@
-{
-    // 使用 IntelliSense 了解相关属性。 
-    // 悬停以查看现有属性的描述。
-    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
-    "configurations": [
-
-        {
-            "name": "Python 调试程序: 当前文件",
-            "type": "debugpy",
-            "request": "launch",
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "python": "/home/ps/anaconda3/envs/robodiff/bin/python3",
-            "program": "train_pusht.py",
-            "args": [
-                "--config-path", "ibc/config",
-                "--config-name", "image_pusht_diffusion_policy_cnn",
-            ],
-            "env": {"CUDA_VISIBLE_DEVICES":"0"}
-
-        }
-    ]
-}
+    {
+        // 使用 IntelliSense 了解相关属性。 
+        // 悬停以查看现有属性的描述。
+        // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+        "version": "0.2.0",
+        "configurations": [
+            // read_data.py
+            {
+                "name": "调试 read_data.py",  // 配置名称（需唯一，方便选择）
+                "type": "debugpy",
+                "request": "launch",
+                "console": "integratedTerminal",
+                "justMyCode": false,
+                "python": "/home/ps/anaconda3/envs/robodiff/bin/python3",  // 虚拟环境路径（若与第二个程序相同可复用）
+                "program": "data/read_data.py",  // 第一个程序的路径（相对/绝对路径）
+                "env": {"CUDA_VISIBLE_DEVICES":"0"},  // 环境变量（如需要）
+                // "cwd": "${fileDirname}"  // 工作目录（根据程序位置调整）
+            },
+            // 第二个程序：train_pusht.py
+            {
+                "name": "调试 train_2DpushT",
+                "type": "debugpy",
+                "request": "launch",
+                "console": "integratedTerminal",
+                "justMyCode": false,
+                "python": "/home/ps/anaconda3/envs/robodiff/bin/python3",
+                "program": "train_pusht.py",
+                "args": [
+                    "--config-path", "ibc/config",
+                    "--config-name", "image_pusht_diffusion_policy_cnn",
+                ],
+                "env": {"CUDA_VISIBLE_DEVICES":"0"}
+            },
+            // 调试 langevin sample in 2DpushT
+            {
+                "name": "调试 langevin_2DpushT",
+                "type": "debugpy",
+                "request": "launch",
+                "console": "integratedTerminal",
+                "justMyCode": false,
+                "python": "/home/ps/anaconda3/envs/robodiff/bin/python3",
+                "program": "train_pusht.py",
+                "args": [
+                    "--config-path", "ibc/config",
+                    "--config-name", "simulation_pushing_pixel",
+                ],
+                "env": {"CUDA_VISIBLE_DEVICES":"0"}
+            },
+            // debug simulation_pushing_state
+            {
+                "name": "调试 simulation_pushing_state",
+                "type": "debugpy",
+                "request": "launch",
+                "console": "integratedTerminal",
+                "justMyCode": false,
+                "python": "/home/ps/anaconda3/envs/robodiff/bin/python3",
+                "program": "train_pusht.py",
+                "args": [
+                    "--config-path", "ibc/config",
+                    "--config-name", "simulation_pushing_state",
+                ],
+                "env": {"CUDA_VISIBLE_DEVICES":"0"}
+            }
+        ]
+    }

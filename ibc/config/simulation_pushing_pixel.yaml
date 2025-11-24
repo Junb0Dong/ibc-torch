@@ -1,4 +1,4 @@
-_target_: ibc.workspace.simulation_pushing_pixel.SimulationPushingPixelPolicy
+_target_: ibc.workspace.simulation_pushing_pixel_workspace.SimulationPushingWorkspace
 checkpoint:
   save_last_ckpt: true
   save_last_snapshot: false
@@ -13,7 +13,7 @@ dataloader:
   persistent_workers: false
   pin_memory: true
   shuffle: true
-dataset_obs_steps: 1
+dataset_obs_steps: 2
 exp_name: default
 horizon: 1
 keypoint_visible_rate: 1.0
@@ -21,38 +21,41 @@ logging:
   group: null
   id: null
   mode: online
-  name: simulation_pushing_pixel_langevin
-  project: ibc_debug
+  name: simulation_pushing_pixel
+  project: diffusion_policy_debug
   resume: true
   tags:
-  - pushing_pixel
-  - langevin
+  - simulation_pushing_pixel
+  - simulation_pushing_pixel
   - default
 n_latency_steps: 0
 n_obs_steps: 2
-name: simulation_pushing_pixel_hybrid
+name: simulation_pushing_pixel
+obs_as_global_cond: true
 optimizer:
   _target_: torch.optim.AdamW
   betas:
   - 0.95
   - 0.999
   eps: 1.0e-08
-  lr: 1e-3
+  lr: 0.0001
   weight_decay: 5.0e-04
 past_action_visible: false
 n_action_steps: 1
 policy:
-  _target_: ibc.policy.ebm_image_policy.EbmUnetHybridImagePolicy
-  input_channels: 6
+  _target_: ibc.policy.simulation_pushing_pixel_policy.SimulationPushingPixelPolicy
+  input_channels: 3
   cnn_blocks: [32, 64, 128, 256]
   n_action_steps: 1
-  resnet_width: 512
-  resnet_num_blocks: 2
+  resnet_width: 1024
+  resnet_num_blocks: 1
   target_bounds: [[-1, -1], [1, 1]]
   infer_samples: 2048
-  negative_samples: 8 
+  negative_samples: 32
   optimize_again: True
   device_type: 'cuda'
+  infer_iter: 60
+  use_polynomial_rate: True
   shape_meta:
     action:
       shape:
@@ -82,7 +85,7 @@ shape_meta:
       - 3
       - 96
       - 96
-      type: rgb
+      type: rgb 
 task:
   dataset:
     _target_: dataset.pusht_image_dataset.PushTImageDataset
@@ -127,7 +130,7 @@ task:
         - 96
         - 96
         type: rgb
-task_name: pusht_image
+task_name: simulation_pushing_pixel
 training:
   checkpoint_every: 50
   debug: false
@@ -137,7 +140,7 @@ training:
   lr_warmup_steps: 500
   max_train_steps: null
   max_val_steps: null
-  num_epochs: 1000
+  num_epochs: 3000
   resume: true
   rollout_every: 50
   sample_every: 5
@@ -146,7 +149,7 @@ training:
   use_ema: false
   val_every: 1
 val_dataloader:
-  batch_size: 256
+  batch_size: 128
   num_workers: 8
   persistent_workers: false
   pin_memory: true

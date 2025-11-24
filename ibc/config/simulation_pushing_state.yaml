@@ -1,0 +1,149 @@
+_target_: ibc.workspace.simulation_pushing_state_workspace.SimulationPushingStateWorkspace
+checkpoint:
+  topk:
+    monitor_key: train_loss
+    mode: min
+    k: 5
+    format_str: 'epoch={epoch:04d}-train_loss={train_loss:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+dataloader:
+  batch_size: 512
+  num_workers: 8
+  persistent_workers: false
+  pin_memory: true
+  shuffle: true
+dataset_obs_steps: 2
+exp_name: default
+horizon: 1
+keypoint_visible_rate: 1.0
+logging:
+  group: null
+  id: null
+  mode: online
+  name: simulation_pushing_state
+  project: diffusion_policy_debug
+  resume: true
+  tags:
+  - simulation_pushing_state
+  - simulation_pushing_state
+  - default
+n_latency_steps: 0
+n_obs_steps: 2
+name: simulation_pushing_state
+obs_as_global_cond: true
+optimizer:
+  _target_: torch.optim.AdamW
+  betas:
+  - 0.95
+  - 0.999
+  eps: 1.0e-08
+  lr: 0.0001
+  weight_decay: 5.0e-04
+past_action_visible: false
+n_action_steps: 1
+policy:
+  _target_: ibc.policy.simulation_pushing_state_policy.SimulationPushingStatePolicy
+  input_dim: 16
+  hidden_dim: 128
+  output_dim: 1
+  hidden_depth: 16
+  n_action_steps: 1
+  dropout_prob: 0.1
+  target_bounds: [[-1, -1], [1, 1]]
+  infer_samples: 16384
+  negative_samples: 256 
+  device_type: 'cuda'
+  shape_meta:
+    actions:
+      shape:
+      - 2
+    obs:
+      block_translation:
+        shape:
+        - 2
+        type: low_dim
+      block_orientation:
+        shape:
+        - 1
+        type: low_dim
+      effector_translation:
+        shape:
+        - 2
+        type: low_dim
+      effector_target_translation:
+        shape:
+        - 2
+        type: low_dim
+      target_translation:
+        shape:
+        - 2
+        type: low_dim
+      target_orientation:
+        shape:
+        - 1
+        type: low_dim
+shape_meta:
+  action:
+    shape:
+    - 2
+  obs:
+    block_translation:
+      shape:
+      - 2
+      type: low_dim
+    block_orientation:
+      shape:
+      - 1
+      type: low_dim
+    effector_translation:
+      shape:
+      - 2
+      type: low_dim
+    effector_target_translation:
+      shape:
+      - 2
+      type: low_dim
+    target_translation:
+      shape:
+      - 2
+      type: low_dim
+    target_orientation:
+      shape:
+      - 1
+      type: low_dim
+
+
+task:
+  dataset:
+    _target_: dataset.simulation_pushing_state_dataset.SimulationPushingStateDataset
+    max_train_episodes: 200
+    pad_after: 7
+    pad_before: 1
+    seed: 42
+    val_ratio: 0.1
+    zarr_path: data/simulation_pushing_state.zarr
+task_name: simulation_pushing_state
+training:
+  checkpoint_every: 100
+  debug: false
+  device: cuda:0
+  gradient_accumulate_every: 1
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  max_train_steps: null
+  max_val_steps: null
+  num_epochs: 5000
+  resume: true
+  rollout_every: 100
+  sample_every: 5
+  seed: 42
+  tqdm_interval_sec: 1.0
+  use_ema: false
+  val_every: 1
+val_dataloader:
+  batch_size: 512
+  num_workers: 8
+  persistent_workers: false
+  pin_memory: true
+  shuffle: false
