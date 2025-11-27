@@ -102,7 +102,7 @@ class EbmUnetHybridImagePolicy(BaseImagePolicy):
         normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
         input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=1)  
 
-        pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model, normalized_agent_pos)  # 此时输入为4D，正常运行
+        pre_action = self.stochastic_optimizer.infer(input.to(self._device), self.model)  # 此时输入为4D，正常运行
 
         # 反归一化，恢复到环境需要的原始尺度
         action_tensor = self.normalizer['action'].unnormalize(pre_action)

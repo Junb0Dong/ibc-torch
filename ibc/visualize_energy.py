@@ -39,13 +39,6 @@ class EnergyVisualizer:
         image = obs_dict['image'].to(self.device)
         agent_pos = obs_dict['agent_pos'].to(self.device)
         
-        # 获取环境状态用于可视化
-        env = PushTImageEnv(render_size=96)
-        
-        # 提取当前状态信息
-        # 直接使用原始obs_dict中的agent_pos
-        agent_pos_unnorm = obs_dict['agent_pos'].cpu().numpy()[0]  # 取第一个batch
-        
         # 创建视频写入器
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video_writer = cv2.VideoWriter(output_path, fourcc, 10.0, (96, 96))  # 只保存能量图
@@ -93,7 +86,7 @@ class EnergyVisualizer:
             # 确保图像张量有正确的维度
             if len(obs_image.shape) == 3:
                 B, H, W = obs_image.shape
-                C = 1  # 假设单通道，但通常图像应为3通道
+                C = 3  # 修正图像通道数
             elif len(obs_image.shape) == 4:
                 B, C, H, W = obs_image.shape
             else:
@@ -165,8 +158,8 @@ class EnergyVisualizer:
         else:
             pred_action_unnorm = pred_action
         
-        # 生成视频帧 - 只生成能量图
-        for i in range(1):
+        # 生成视频帧 - 生成多帧以确保视频可播放
+        for i in range(10):  # 生成10帧以确保视频时长
             # 创建能量热图
             plt.figure(figsize=(6, 6))
             plt.contourf(X, Y, energy_map, levels=50, cmap='viridis_r')
@@ -197,11 +190,183 @@ class EnergyVisualizer:
             
             plt.close()
             
-            # 写入视频帧（只写能量图，不拼接环境图像以避免渲染问题）
+            # 写入视频帧（复制相同帧多次以确保视频时长）
             video_writer.write(energy_img)
         
         video_writer.release()
         print(f"能量分布视频已保存到: {output_path}")
+    
+    def visualize_energy_evolution(self, obs_sequence, output_path, target_bounds=None, 
+                                 resolution=30, n_frames=50):
+        """
+        可视化能量场随时间的演化
+        
+        Args:
+            obs_sequence: 观察序列，每个元素为(obs_dict, action)的元组
+            output_path: 输出视频路径
+            target_bounds: 动作空间边界，默认为 [-1, -1], [1, 1]
+            resolution: 能量图分辨率
+            n_frames: 生成的帧数
+        """
+        if target_bounds is None:
+            target_bounds = torch.tensor([[-1, -1], [1, 1]], dtype=torch.float32).to(self.device)
+        
+        # 创建视频写入器
+        fourcc = cv2.VideoWriter_fourcc(*'avc1')
+        video_writer = cv2.VideoWriter(output_path, fourcc, 10.0, (96, 96))
+        
+        # 创建action网格
+        x_min, y_min = target_bounds[0].cpu().numpy()
+        x_max, y_max = target_bounds[1].cpu().numpy()
+        
+        x = np.linspace(x_min, x_max, resolution)
+        y = np.linspace(y_min, y_max, resolution)
+        X, Y = np.meshgrid(x, y)
+        
+        print(f"开始生成能量场演化视频，总帧数: {n_frames}")
+
+        # 如果obs_sequence没有指定，生成一些示例
+        if not obs_sequence:
+            # 使用当前策略生成一些示例观察
+            from ibc.env.pusht.pusht_image_env import PushTImageEnv
+            env = PushTImageEnv(render_size=96)
+            obs_sequence = []
+            obs = env.reset()
+            for i in range(min(n_frames, 50)):  # 最多50个观测点
+                obs_dict = {
+                    'image': torch.from_numpy(obs['image']).unsqueeze(0).float().to(self.device),
+                    'agent_pos': torch.from_numpy(obs['agent_pos']).unsqueeze(0).float().to(self.device)
+                }
+                obs_sequence.append((obs_dict, None))
+                
+                # 执行动（随机或使用策略）
+                try:
+                    with torch.no_grad():
+                        pred_result = self.policy.predict_action(obs_dict)
+                        action = pred_result['action'].cpu().numpy()[0, 0, :]
+                    obs, _, _, _ = env.step(action * 512)  # 转换到环境动作空间
+                except:
+                    # 如果策略预测失败，使用随机行动
+                    action = np.random.uniform(0, 512, size=(2,))
+                    obs, _, _, _ = env.step(action)
+
+        # 遫生成能量场演化视频
+        for i, (obs_dict, _) in enumerate(obs_sequence[:n_frames]):
+            print(f"处理第 {i+1}/{min(len(obs_sequence), n_frames)} 帧")
+            
+            # 确保图像在正确的设备上
+            image = obs_dict['image'].to(self.device)
+            agent_pos = obs_dict['agent_pos'].to(self.device)
+            
+            # 保持批次维度
+            if image.dim() == 3:
+                image = image.unsqueeze(0)
+            if agent_pos.dim() == 1:
+                agent_pos = agent_pos.unsqueeze(0)
+            
+            # 将网格点转换为动作张量
+            action_grid = np.stack([X, Y], axis=-1).reshape(-1, 2)
+            action_tensor = torch.from_numpy(action_grid).float().to(self.device)
+            action_tensor = action_tensor.unsqueeze(0)  # 添加batch维度
+            action_tensor = action_tensor.repeat(image.shape[0], 1, 1)  # 扩展到batch大小
+            
+            with torch.no_grad():
+                # 获取agent_pos的归一化版本
+                obs_agent_pos = agent_pos
+                obs_image = image
+                
+                # 归一化处理
+                if hasattr(self.policy, 'normalizer') and self.policy.normalizer is not None:
+                    try:
+                        if hasattr(self.policy.normalizer, '__getitem__'):
+                            normalized_agent_pos = self.policy.normalizer['agent_pos'].normalize(obs_agent_pos)
+                        else:
+                            normalized_agent_pos = obs_agent_pos
+                    except (TypeError, KeyError, AttributeError):
+                        normalized_agent_pos = obs_agent_pos
+                else:
+                    normalized_agent_pos = obs_agent_pos
+                
+                # 确保图像张量有正确的维度
+                if len(obs_image.shape) == 3:
+                    B, H, W = obs_image.shape
+                    C = 3
+                elif len(obs_image.shape) == 4:
+                    B, C, H, W = obs_image.shape
+                else:
+                    raise ValueError(f"Unexpected image shape: {obs_image.shape}")
+                    
+                if obs_image.dim() == 3:
+                    obs_image = obs_image.unsqueeze(0)
+                    B, C, H, W = obs_image.shape
+                
+                # 扩展agent_pos的维度以匹配图像
+                normalized_agent_pos_expanded = normalized_agent_pos.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
+                model_input = torch.cat([obs_image, normalized_agent_pos_expanded], dim=1)  # 模型输入格式 (B, C+2, H, W)
+                
+                # 首先对动作进行归一化
+                if hasattr(self.policy, 'normalizer') and self.policy.normalizer is not None:
+                    try:
+                        if hasattr(self.policy.normalizer, '__getitem__'):
+                            normalized_actions = self.policy.normalizer['action'].normalize(action_tensor)
+                        else:
+                            normalized_actions = action_tensor
+                    except (TypeError, KeyError, AttributeError):
+                        normalized_actions = action_tensor
+                else:
+                    normalized_actions = action_tensor
+                
+                # 将归一化的agent_pos扩展以匹配动作张量的形状
+                normalized_agent_pos_for_action = normalized_agent_pos.unsqueeze(1).repeat(1, normalized_actions.shape[1], 1)
+                
+                # 将agent_pos与动作拼接 - 模型期望的格式
+                actions_with_agent = torch.cat([normalized_actions, normalized_agent_pos_for_action], dim=-1)
+                
+                # 计算能量 - 使用正确格式的输入
+                energies = self.policy.model(model_input, actions_with_agent)
+                energies = energies.squeeze(0)  # 移除batch维度
+                energy_map = energies.cpu().numpy().reshape(resolution, resolution)
+                
+                # 获取预测动作
+                try:
+                    pred_result = self.policy.predict_action(obs_dict)
+                    pred_action = pred_result['action'].cpu().numpy()[0, 0, :]  # 取第一个时间步的第一个batch
+                except Exception as e:
+                    # 如果无法预测动作，使用随机动作
+                    pred_action = np.random.uniform(-1, 1, size=(2,))
+                
+            # 创建能量热图
+            plt.figure(figsize=(96, 96))
+            plt.contourf(X, Y, energy_map, levels=50, cmap='viridis_r')
+            plt.colorbar(label='Energy')
+            
+            # 标记预测动作
+            plt.plot(pred_action[0], pred_action[1], 'bo', markersize=10, label='Predicted Action')
+            
+            # 标记目标边界
+            plt.plot([x_min, x_max, x_max, x_min, x_min], 
+                    [y_min, y_min, y_max, y_max, y_min], 'w--', label='Target Bounds')
+            
+            plt.title(f'Energy Field Evolution - Step {i+1}')
+            plt.xlabel('Action X')
+            plt.ylabel('Action Y')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # 保存能量图
+            energy_fig = plt.gcf()
+            energy_fig.canvas.draw()
+            energy_img = np.frombuffer(energy_fig.canvas.tostring_rgb(), dtype=np.uint8)
+            energy_img = energy_img.reshape(energy_fig.canvas.get_width_height()[::-1] + (3,))
+            energy_img = cv2.resize(energy_img, (96, 96))  # 调整大小
+            
+            plt.close()
+            
+            # 写入视频帧
+            video_writer.write(energy_img)
+        
+        video_writer.release()
+        print(f"能量场演化视频已保存到: {output_path}")
         
     def render_env_with_positions(self, env, agent_pos):
         """渲染带位置信息的环境图像"""

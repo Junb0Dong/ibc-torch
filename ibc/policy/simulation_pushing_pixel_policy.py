@@ -10,6 +10,7 @@ from ibc import models, optimizers
 import numpy as np
 
 from typing import List
+from ibc.common.pytorch_util import dict_apply, replace_submodules
 
 """
 这个policy针对ibc的pixel来配置，包括参数和网络的设置，训练的loss计算以及预测动作。
@@ -33,6 +34,7 @@ class SimulationPushingPixelPolicy(BaseImagePolicy):
         device_type: str = "cuda",
         infer_iter: int = 25,
         use_polynomial_rate: bool = True,
+        n_obs_steps: int = 2,
         ):
         super().__init__()
         _device = torch.device(device_type if torch.cuda.is_available() else "cpu")
@@ -53,7 +55,7 @@ class SimulationPushingPixelPolicy(BaseImagePolicy):
         
         # 使用ConvMaxPool加DenseResMLP
         model = models.ConvResnetEBM(
-            cnn_in_channels=input_channels,
+            cnn_in_channels=input_channels * n_obs_steps,
             cnn_blocks = cnn_blocks,
             resnet_width=resnet_width,
             resnet_num_blocks=resnet_num_blocks,
@@ -82,6 +84,7 @@ class SimulationPushingPixelPolicy(BaseImagePolicy):
         )
 
         self.normalizer = LinearNormalizer()
+        self.n_obs_steps = n_obs_steps
 
     def predict_action( self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         # normalized_obs = {}
@@ -90,15 +93,18 @@ class SimulationPushingPixelPolicy(BaseImagePolicy):
 
         # obs_input = torch.cat([normalized_obs[k] for k in obs_dict], dim=-1)
         
-        obs_input = obs_dict['image'][:, -1]
+        obs_input = obs_dict['image']
+
+        # 在通道上堆叠时间维度 reshape B, T, ... to B*T
+        n_obs = obs_input[:, :self.n_obs_steps, ...].permute(0, 2, 1, 3, 4).reshape(obs_input.shape[0], -1, *obs_input.shape[3:])
         
-        sample_actions = self.stochastic_optimizer.sample(obs_input.size(0), self.model)
+        sample_actions = self.stochastic_optimizer.sample(n_obs.size(0), self.model)
         
         # 临时启用梯度：包围 Langevin 调用
         with torch.enable_grad():
             langevin_result, _ = self.stochastic_optimizer.langevin_optimize(
                 energy_network=self.model, 
-                observations=obs_input.to(self._device), 
+                observations=n_obs.to(self._device), 
                 action_samples=sample_actions
             )
         
@@ -109,11 +115,11 @@ class SimulationPushingPixelPolicy(BaseImagePolicy):
             with torch.enable_grad():  # 再次包围
                 langevin_result, _ = self.stochastic_optimizer.langevin_optimize(
                     energy_network=self.model, 
-                    observations=obs_input.to(self._device), 
+                    observations=n_obs.to(self._device), 
                     action_samples=pre_actions
                 )
-            
-        prediction_action = self.stochastic_optimizer.get_min_energy_action(self.model, obs_input.to(self._device), langevin_result['action'])
+
+        prediction_action = self.stochastic_optimizer.get_min_energy_action(self.model, n_obs.to(self._device), langevin_result['action'])
 
         action_tensor = self.normalizer['action'].unnormalize(prediction_action)
         action_tensor = action_tensor.unsqueeze(1).repeat(1, self.n_action_steps, 1)
@@ -155,89 +161,156 @@ class SimulationPushingPixelPolicy(BaseImagePolicy):
 
     # TODO：添加last_action信息
     # TODO： obs的时间信息堆叠到通道上
+    def InfoNCE_loss(self, batch, progress, training=True):
+        obs_image = batch['obs']['image']
+        B, T, C, H, W = obs_image.shape
+
+        # 在通道上堆叠时间维度 reshape B, T, ... to B*T
+        # n_obs = obs_image[:, :self.n_obs_steps, ...].reshape(-1, *obs_image.shape[2:])
+        n_obs = obs_image[:, :self.n_obs_steps, ...].permute(0, 2, 1, 3, 4).reshape(obs_image.shape[0], -1, *obs_image.shape[3:])
+
+        # Positive samples
+        # positive = self.normalizer['action'].normalize(batch['action'])
+        positive = self.normalizer['action'].normalize(batch['action'][:,1,:])
+        E_pos = self.model(n_obs, positive)  # (B, 1)
+
+        negative = self.stochastic_optimizer.negative_sample(B, self.model)
+
+        with torch.enable_grad():
+            langevin_result, _ = self.stochastic_optimizer.langevin_optimize(
+                    energy_network = self.model, # 使用 model 本身，但只允许 E_neg 梯度通过
+                    observations = n_obs.detach(), # 避免 obs 的梯度也进入 MCMC 图
+                    action_samples = negative
+                )
+
+        E_neg = langevin_result['energies']  # (B, N_neg)
+        if E_neg.mean() < E_pos.mean():
+            print(f"[Warning] E_neg ({E_neg.mean().item():.3f}) < E_pos ({E_pos.mean().item():.3f}) at progress={progress:.2f}")
+        E_all = torch.cat([E_pos, E_neg], dim=1)  # (B, N_neg+1)
+
+        # InfoNCE loss using stable logsumexp
+        temperature = 0.6
+        logits = -E_all/temperature  # (B, N_neg+1)
+        log_sum_exp = torch.logsumexp(logits, dim=1, keepdim=True)  # (B, 1)
+        log_prob_pos = logits[:, 0:1] - log_sum_exp  # (B, 1)
+
+        # 添加正则化
+        l2_reg_lambda = getattr(self, 'l2_reg_lambda', 1e-4)  # 1e-5 ~ 1e-3 可调
+        l2_reg_loss = 0.0
+        for param in self.model.parameters():
+            if param.requires_grad:
+                l2_reg_loss += torch.norm(param, p=2)  # L2范数惩罚
+        l2_reg_loss = l2_reg_lambda * l2_reg_loss
+
+        # Negative log likelihood
+        loss = -log_prob_pos.mean() + l2_reg_loss
+
+        return loss
+
+
     # def InfoNCE_loss(self, batch, progress, training=True):
     #     obs_image = batch['obs']['image'].squeeze(1)
     #     B, C, H, W = obs_image.shape
 
-    #     # Positive samples
+    #     # === 正样本 ===
     #     positive = self.normalizer['action'].normalize(batch['action'])
     #     E_pos = self.model(obs_image, positive)  # (B, 1)
 
-    #     negative = self.stochastic_optimizer.negative_sample(B, self.model)
-        
+    #     negatives_far = self.stochastic_optimizer.negative_sample_delta(B, self.model, 16)
+
+    #     negatives_init = self.stochastic_optimizer.negative_sample_delta(B, self.model, -16)
     #     with torch.enable_grad():
     #         langevin_result, _ = self.stochastic_optimizer.langevin_optimize(
-    #                 energy_network = self.model, # 使用 model 本身，但只允许 E_neg 梯度通过
-    #                 observations = obs_image.detach(), # 避免 obs 的梯度也进入 MCMC 图
+    #             energy_network=self.model,
+    #             observations=obs_image.detach(),
+    #             action_samples=negatives_init
+    #         )
+    #     negatives_near = langevin_result['action']  # Langevin 优化后的负样本
+    #     E_neg_near = langevin_result['energies']    # 对应能量
+
+    #     # === 远离正样本负样本能量 ===
+    #     E_neg_far = self.model(obs_image, negatives_far)  # (B, n_far)
+
+    #     # === 合并负样本 ===
+    #     negatives_all = torch.cat([negatives_far, negatives_near], dim=1)  # (B, N_neg)
+    #     E_neg_all = torch.cat([E_neg_far, E_neg_near], dim=1)  # (B, N_neg)
+
+    #     # === 打乱顺序 ===
+    #     idx = torch.randperm(E_neg_all.size(1))
+    #     E_neg_all = E_neg_all[:, idx]
+    #     negatives_all = negatives_all[:, idx]
+
+    #     # === 计算 InfoNCE ===
+    #     E_all = torch.cat([E_pos, E_neg_all], dim=1)  # (B, N_neg+1)
+    #     logits = -E_all
+    #     log_sum_exp = torch.logsumexp(logits, dim=1, keepdim=True)
+    #     log_prob_pos = logits[:, 0:1] - log_sum_exp
+
+    #     # === L2 正则 ===
+    #     l2_reg_lambda = getattr(self, 'l2_reg_lambda', 1e-4)
+    #     l2_reg_loss = sum(torch.norm(p, p=2) for p in self.model.parameters() if p.requires_grad)
+    #     l2_reg_loss = l2_reg_lambda * l2_reg_loss
+
+    #     loss = -log_prob_pos.mean() + l2_reg_loss
+    #     return loss
+
+
+    # # InfoNCE with dynamic temperature
+    # def InfoNCE_loss(self, batch, progress, training=True):
+    #     obs_image = batch['obs']['image'].squeeze(1)
+    #     B, C, H, W = obs_image.shape
+
+    #     # ==== Positive Samples =====
+    #     positive = self.normalizer['action'].normalize(batch['action'])
+    #     E_pos = self.model(obs_image, positive)  # (B, 1)
+
+    #     # ==== Negative Sampling via Langevin =====
+    #     negative = self.stochastic_optimizer.negative_sample(B, self.model)
+
+    #     with torch.enable_grad():
+    #         langevin_result, _ = self.stochastic_optimizer.langevin_optimize(
+    #                 energy_network = self.model,
+    #                 observations = obs_image.detach(),
     #                 action_samples = negative
     #             )
 
     #     E_neg = langevin_result['energies']  # (B, N_neg)
-    #     if E_neg.mean() < E_pos.mean():
-    #         print(f"[Warning] E_neg ({E_neg.mean().item():.3f}) < E_pos ({E_pos.mean().item():.3f}) at progress={progress:.2f}")
-    #     E_all = torch.cat([E_pos, E_neg], dim=1)  # (B, N_neg+1)
 
-    #     # InfoNCE loss using stable logsumexp
-    #     logits = -E_all  # (B, N_neg+1)
-    #     log_sum_exp = torch.logsumexp(logits, dim=1, keepdim=True)  # (B, 1)
-    #     log_prob_pos = logits[:, 0:1] - log_sum_exp  # (B, 1)
+    #     # ==== Dynamic Temperature (τ) =====
+    #     # Energy gap helps decide hardness
+    #     gap = (E_neg.mean() - E_pos.mean()).detach()
 
-    #     # 添加正则化
-    #     l2_reg_lambda = getattr(self, 'l2_reg_lambda', 1e-4)  # 1e-5 ~ 1e-3 可调
+    #     # 单调调节逻辑：gap 大 → soft，gap 小 → 尖锐
+    #     # 5.0 可调 (根据能量尺度)，min=0.5,max=5.0 防止极端
+    #     dynamic_tau = torch.clamp(gap / 5.0, 0.5, 5.0).item()
+
+    #     # 保存 τ 以便 logging 或 tensorboard 可视化
+    #     if not hasattr(self, 'temperature'):
+    #         self.temperature = 1.0
+    #     # EMA 滤波防止抖动
+    #     self.temperature = 0.9 * self.temperature + 0.1 * dynamic_tau  
+
+    #     # ==== InfoNCE with Temperature Scaling =====
+    #     E_all = torch.cat([E_pos, E_neg], dim=1)  # (B, N+1)
+
+    #     logits = -E_all / self.temperature          # 核心修改！
+    #     log_sum_exp = torch.logsumexp(logits, dim=1, keepdim=True)
+    #     log_prob_pos = logits[:, 0:1] - log_sum_exp
+
+    #     # ==== L2 Regularization =====
+    #     l2_reg_lambda = getattr(self, 'l2_reg_lambda', 1e-4)
     #     l2_reg_loss = 0.0
     #     for param in self.model.parameters():
     #         if param.requires_grad:
-    #             l2_reg_loss += torch.norm(param, p=2)  # L2范数惩罚
+    #             l2_reg_loss += torch.norm(param, p=2)
     #     l2_reg_loss = l2_reg_lambda * l2_reg_loss
 
-    #     # Negative log likelihood
     #     loss = -log_prob_pos.mean() + l2_reg_loss
 
+    #     # ==== Debug monitor (可去掉) =====
+    #     if progress % 0.1 == 0:
+    #         print(f"[InfoNCE] τ={self.temperature:.3f}, "
+    #             f"E_pos={E_pos.mean().item():.3f}, "
+    #             f"E_neg={E_neg.mean().item():.3f}, gap={gap.item():.3f}")
+
     #     return loss
-
-
-    def InfoNCE_loss(self, batch, progress, training=True):
-        obs_image = batch['obs']['image'].squeeze(1)
-        B, C, H, W = obs_image.shape
-
-        # === 正样本 ===
-        positive = self.normalizer['action'].normalize(batch['action'])
-        E_pos = self.model(obs_image, positive)  # (B, 1)
-
-        negatives_far = self.stochastic_optimizer.negative_sample_delta(B, self.model, 16)
-
-        negatives_init = self.stochastic_optimizer.negative_sample_delta(B, self.model, -16)
-        with torch.enable_grad():
-            langevin_result, _ = self.stochastic_optimizer.langevin_optimize(
-                energy_network=self.model,
-                observations=obs_image.detach(),
-                action_samples=negatives_init
-            )
-        negatives_near = langevin_result['action']  # Langevin 优化后的负样本
-        E_neg_near = langevin_result['energies']    # 对应能量
-
-        # === 远离正样本负样本能量 ===
-        E_neg_far = self.model(obs_image, negatives_far)  # (B, n_far)
-
-        # === 合并负样本 ===
-        negatives_all = torch.cat([negatives_far, negatives_near], dim=1)  # (B, N_neg)
-        E_neg_all = torch.cat([E_neg_far, E_neg_near], dim=1)  # (B, N_neg)
-
-        # === 打乱顺序 ===
-        idx = torch.randperm(E_neg_all.size(1))
-        E_neg_all = E_neg_all[:, idx]
-        negatives_all = negatives_all[:, idx]
-
-        # === 计算 InfoNCE ===
-        E_all = torch.cat([E_pos, E_neg_all], dim=1)  # (B, N_neg+1)
-        logits = -E_all
-        log_sum_exp = torch.logsumexp(logits, dim=1, keepdim=True)
-        log_prob_pos = logits[:, 0:1] - log_sum_exp
-
-        # === L2 正则 ===
-        l2_reg_lambda = getattr(self, 'l2_reg_lambda', 1e-4)
-        l2_reg_loss = sum(torch.norm(p, p=2) for p in self.model.parameters() if p.requires_grad)
-        l2_reg_loss = l2_reg_lambda * l2_reg_loss
-
-        loss = -log_prob_pos.mean() + l2_reg_loss
-        return loss

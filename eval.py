@@ -111,7 +111,7 @@ def main(checkpoint, output_dir, device, visualize_energy):
             visualizer.visualize_energy_distribution(
                 obs_dict=obs_dict,
                 output_path=video_path,
-                resolution=30  # 降低分辨率以加快计算
+                resolution=1024  # 降低分辨率以加快计算
             )
             
             runner_log[f'energy_video_{i}'] = wandb.Video(video_path)
